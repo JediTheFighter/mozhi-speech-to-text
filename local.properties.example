@@ -1,5 +1,6 @@
 ## Copy to local.properties and point at your Android SDK.
 sdk.dir=/Users/YOU/Library/Android/sdk
 
-# Optional. Never commit this file. You can also paste the key in the app.
+# Google AI Studio key (https://aistudio.google.com/apikey). Never commit this file.
+# Rebuild the app after changing this value.
 # GEMINI_API_KEY=AIza...

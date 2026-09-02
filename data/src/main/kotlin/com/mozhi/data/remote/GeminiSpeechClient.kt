@@ -3,7 +3,7 @@ package com.mozhi.data.remote
 import android.util.Base64
 import com.mozhi.core.common.AudioConfig
 import com.mozhi.core.common.MozhiLog
-import com.mozhi.domain.repository.GeminiSettingsRepository
+import com.mozhi.data.di.GeminiApiKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,7 +18,7 @@ import javax.inject.Singleton
 
 @Singleton
 class GeminiSpeechClient @Inject constructor(
-    private val settings: GeminiSettingsRepository,
+    @GeminiApiKey private val apiKey: String,
 ) {
     private val http = OkHttpClient.Builder()
         .callTimeout(45, TimeUnit.SECONDS)
@@ -26,15 +26,20 @@ class GeminiSpeechClient @Inject constructor(
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
+    fun hasApiKey(): Boolean = apiKey.isNotBlank()
+
     suspend fun transcribe(samples: FloatArray): String = withContext(Dispatchers.IO) {
-        val key = settings.apiKey()
-        check(key.isNotBlank()) { "Gemini API key missing" }
+        check(apiKey.isNotBlank()) {
+            "GEMINI_API_KEY missing. Add it to local.properties and rebuild."
+        }
         val wav = WavEncoder.pcm16Mono(samples, AudioConfig.SAMPLE_RATE_HZ)
         val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
-        MozhiLog.i("gemini request wavBytes=${wav.size} samples=${samples.size} b64=${b64.length}")
+        MozhiLog.i(
+            "gemini request wavBytes=${wav.size} samples=${samples.size} keyLen=${apiKey.length}",
+        )
         var lastError = "Gemini request failed"
         for (model in MODELS) {
-            val result = callModel(key, model, b64)
+            val result = callModel(model, b64)
             if (result.isSuccess) {
                 val text = clean(result.getOrThrow())
                 MozhiLog.i("gemini ok model=$model chars=${text.length} text='${text.take(80)}'")
@@ -46,7 +51,7 @@ class GeminiSpeechClient @Inject constructor(
         error(lastError)
     }
 
-    private fun callModel(key: String, model: String, b64: String): Result<String> = runCatching {
+    private fun callModel(model: String, b64: String): Result<String> = runCatching {
         val body = JSONObject()
             .put(
                 "contents",
@@ -74,16 +79,26 @@ class GeminiSpeechClient @Inject constructor(
             )
             .toString()
         val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
+            .addHeader("x-goog-api-key", apiKey)
+            .addHeader("Content-Type", "application/json")
             .post(body.toRequestBody(JSON))
             .build()
         http.newCall(request).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                error("HTTP ${response.code}: ${raw.take(180)}")
+                error(formatHttpError(response.code, raw, model))
             }
             parseText(raw)
         }
+    }
+
+    private fun formatHttpError(code: Int, raw: String, model: String): String {
+        val message = runCatching {
+            JSONObject(raw).optJSONObject("error")?.optString("message").orEmpty()
+        }.getOrDefault("")
+        val detail = message.ifBlank { raw.take(180) }
+        return "HTTP $code ($model): $detail"
     }
 
     private fun parseText(raw: String): String {
@@ -115,7 +130,8 @@ class GeminiSpeechClient @Inject constructor(
         val MODELS = listOf(
             "gemini-2.5-flash",
             "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
+            "gemini-flash-latest",
+            "gemini-1.5-flash",
         )
         const val PROMPT =
             "Transcribe this audio. The speaker is talking in Malayalam. " +

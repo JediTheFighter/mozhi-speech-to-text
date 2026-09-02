@@ -1,10 +1,8 @@
 package com.mozhi.data.di
 
-import com.mozhi.data.repository.GeminiSettingsRepositoryImpl
 import com.mozhi.data.repository.ModelRepositoryImpl
 import com.mozhi.data.repository.SpeechRepositoryImpl
 import com.mozhi.data.repository.TranslationRepositoryImpl
-import com.mozhi.domain.repository.GeminiSettingsRepository
 import com.mozhi.domain.repository.ModelRepository
 import com.mozhi.domain.repository.SpeechRepository
 import com.mozhi.domain.repository.TranslationRepository
@@ -28,8 +26,4 @@ abstract class DataModule {
     @Binds
     @Singleton
     abstract fun translation(impl: TranslationRepositoryImpl): TranslationRepository
-
-    @Binds
-    @Singleton
-    abstract fun geminiSettings(impl: GeminiSettingsRepositoryImpl): GeminiSettingsRepository
 }

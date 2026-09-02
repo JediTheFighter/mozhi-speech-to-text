@@ -2,9 +2,9 @@ package com.mozhi.data.repository
 
 import com.mozhi.core.audio.MicrophoneEngine
 import com.mozhi.core.common.MozhiLog
+import com.mozhi.data.remote.GeminiSpeechClient
 import com.mozhi.data.stt.GeminiStreamingSpeechToText
 import com.mozhi.domain.model.TranscriptionSnapshot
-import com.mozhi.domain.repository.GeminiSettingsRepository
 import com.mozhi.domain.repository.SpeechRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -25,7 +25,7 @@ import javax.inject.Singleton
 class SpeechRepositoryImpl @Inject constructor(
     private val microphone: MicrophoneEngine,
     private val streaming: GeminiStreamingSpeechToText,
-    private val geminiSettings: GeminiSettingsRepository,
+    private val gemini: GeminiSpeechClient,
 ) : SpeechRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -34,10 +34,12 @@ class SpeechRepositoryImpl @Inject constructor(
 
     override val transcription: Flow<TranscriptionSnapshot> = streaming.snapshot
 
-    override fun isEngineReady(): Boolean = false
+    override fun isEngineReady(): Boolean = gemini.hasApiKey()
 
     override suspend fun ensureEngineReady() {
-        check(geminiSettings.apiKey().isNotBlank()) { "Gemini API key missing" }
+        check(gemini.hasApiKey()) {
+            "GEMINI_API_KEY missing. Add it to local.properties and rebuild the app."
+        }
         MozhiLog.i("ensureEngineReady gemini cloud")
     }
 

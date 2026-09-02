@@ -29,13 +29,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -57,7 +53,6 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -76,7 +71,7 @@ import com.mozhi.feature.transcribe.TranscribeViewModel
 
 @Composable
 fun TranscribeRoute(
-    @Suppress("UNUSED_PARAMETER") onOpenModels: () -> Unit,
+    onOpenModels: () -> Unit,
     viewModel: TranscribeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -93,23 +88,17 @@ fun TranscribeRoute(
         viewModel.onPermissionResult(granted, permanentlyDenied)
     }
 
-    LaunchedEffect(state.catalogLoaded, state.selectedModelReady) {
-        if (state.catalogLoaded && !state.selectedModelReady) {
-            viewModel.onStartupIfModelMissing()
-        }
-    }
-
     TranscribeScreen(
         state = state,
         onToggleListen = {
             when {
                 state.listening -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
-                !state.selectedModelReady -> viewModel.showModelPrompt()
+                !state.selectedModelReady -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
                 state.permissionNeeded -> launcher.launch(Manifest.permission.RECORD_AUDIO)
                 else -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
             }
         },
-        onOpenModels = viewModel::showModelPrompt,
+        onOpenModels = onOpenModels,
         onOpenSettings = {
             context.startActivity(
                 Intent(
@@ -119,9 +108,6 @@ fun TranscribeRoute(
             )
         },
         onClearError = viewModel::clearError,
-        onDismissPrompt = viewModel::dismissModelPrompt,
-        onApiKeyChange = viewModel::onApiKeyDraftChange,
-        onSaveApiKey = viewModel::saveApiKey,
     )
 }
 
@@ -132,9 +118,6 @@ fun TranscribeScreen(
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
     onClearError: () -> Unit,
-    onDismissPrompt: () -> Unit,
-    onApiKeyChange: (String) -> Unit,
-    onSaveApiKey: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
@@ -192,10 +175,11 @@ fun TranscribeScreen(
                 LiveTranscriptCard(
                     committed = state.snapshot.committedText,
                     partial = state.snapshot.partialText,
+                    error = state.snapshot.errorMessage,
                     listening = state.listening,
                     processing = state.snapshot.isProcessing,
                     onCopy = {
-                        val text = state.snapshot.displayText
+                        val text = state.snapshot.displayText.ifBlank { state.snapshot.errorMessage }
                         if (text.isNotBlank()) clipboard.setText(AnnotatedString(text))
                     },
                     modifier = Modifier.weight(1f),
@@ -228,6 +212,7 @@ fun TranscribeScreen(
                     ) {
                         Text(
                             text = when {
+                                state.snapshot.isProcessing -> MalayalamCopy.Decoding
                                 state.listening -> MalayalamCopy.HintListening
                                 !state.selectedModelReady -> MalayalamCopy.HintNoModel
                                 state.permissionNeeded -> MalayalamCopy.HintPermission
@@ -243,48 +228,13 @@ fun TranscribeScreen(
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
     }
-
-    if (state.showModelPrompt) {
-        AlertDialog(
-            onDismissRequest = onDismissPrompt,
-            title = { Text(MalayalamCopy.DialogTitle, color = Mist) },
-            text = {
-                Column {
-                    Text(MalayalamCopy.DialogBody, color = MistMuted)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = state.apiKeyDraft,
-                        onValueChange = onApiKeyChange,
-                        label = { Text(MalayalamCopy.KeyLabel) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Mist,
-                            unfocusedTextColor = Mist,
-                            focusedLabelColor = MonsoonTeal,
-                            unfocusedLabelColor = MistMuted,
-                            cursorColor = MonsoonTeal,
-                            focusedBorderColor = MonsoonTeal,
-                            unfocusedBorderColor = MistMuted,
-                        ),
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = onSaveApiKey) { Text(MalayalamCopy.DialogOk) }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel, color = Mist) }
-            },
-            containerColor = NightRaised,
-        )
-    }
 }
 
 @Composable
 private fun LiveTranscriptCard(
     committed: String,
     partial: String,
+    error: String,
     listening: Boolean,
     processing: Boolean,
     onCopy: () -> Unit,
@@ -322,23 +272,27 @@ private fun LiveTranscriptCard(
                 .verticalScroll(rememberScrollState()),
         ) {
             AnimatedContent(
-                targetState = committed to partial,
+                targetState = Triple(committed, partial, error),
                 transitionSpec = { fadeIn() togetherWith fadeOut() },
                 label = "transcript",
-            ) { (c, p) ->
+            ) { (c, p, err) ->
                 val text = buildAnnotatedString {
-                    if (c.isBlank() && p.isBlank()) {
-                        withStyle(SpanStyle(color = MistMuted)) { append(placeholder) }
-                    } else {
-                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Medium)) {
-                            append(c)
+                    when {
+                        err.isNotBlank() -> withStyle(SpanStyle(color = Color(0xFFFF8A80), fontWeight = FontWeight.Medium)) {
+                            append(err)
                         }
-                        if (c.isNotBlank() && p.isNotBlank()) append(" ")
-                        withStyle(SpanStyle(color = MonsoonTeal.copy(alpha = 0.92f))) {
-                            append(p)
-                        }
-                        if (listening) {
-                            withStyle(SpanStyle(color = MonsoonTeal)) { append(" ▍") }
+                        c.isBlank() && p.isBlank() -> withStyle(SpanStyle(color = MistMuted)) { append(placeholder) }
+                        else -> {
+                            withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Medium)) {
+                                append(c)
+                            }
+                            if (c.isNotBlank() && p.isNotBlank()) append(" ")
+                            withStyle(SpanStyle(color = MonsoonTeal.copy(alpha = 0.92f))) {
+                                append(p)
+                            }
+                            if (listening) {
+                                withStyle(SpanStyle(color = MonsoonTeal)) { append(" ▍") }
+                            }
                         }
                     }
                 }
