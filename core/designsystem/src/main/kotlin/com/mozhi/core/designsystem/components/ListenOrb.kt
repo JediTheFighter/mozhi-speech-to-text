@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.mozhi.core.designsystem.theme.LotusCoral
 import com.mozhi.core.designsystem.theme.MonsoonTeal
 import com.mozhi.core.designsystem.theme.NightInk
@@ -113,7 +114,9 @@ fun ListenOrb(
         }
         FilledIconButton(
             onClick = onToggle,
-            modifier = Modifier.size(92.dp),
+            modifier = Modifier
+                .size(92.dp)
+                .zIndex(1f),
             shape = CircleShape,
             colors = IconButtonDefaults.filledIconButtonColors(
                 containerColor = if (listening) LotusCoral else MonsoonTeal,

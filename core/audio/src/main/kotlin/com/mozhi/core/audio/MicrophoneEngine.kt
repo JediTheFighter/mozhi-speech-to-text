@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import com.mozhi.core.common.AudioConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -28,22 +30,23 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
         )
-        val frameSamples = AudioConfig.SAMPLE_RATE_HZ / 10 // 100ms
-        val bufferSize = maxOf(minBuf, frameSamples * 2 * 4)
-        val recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            AudioConfig.SAMPLE_RATE_HZ,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize,
-        )
-        check(recorder.state == AudioRecord.STATE_INITIALIZED) { "Microphone failed to initialize" }
+        check(minBuf > 0) { "Microphone is not available on this device" }
+        val frameSamples = AudioConfig.SAMPLE_RATE_HZ / 10
+        val bufferSize = maxOf(minBuf, frameSamples * 2 * 8)
+        val recorder = openRecorder(bufferSize)
         val shortBuf = ShortArray(frameSamples)
         recorder.startRecording()
         try {
             while (currentCoroutineContext().isActive) {
-                val read = recorder.read(shortBuf, 0, shortBuf.size)
-                if (read <= 0) continue
+                val read = if (Build.VERSION.SDK_INT >= 23) {
+                    recorder.read(shortBuf, 0, shortBuf.size, AudioRecord.READ_NON_BLOCKING)
+                } else {
+                    recorder.read(shortBuf, 0, shortBuf.size)
+                }
+                if (read <= 0) {
+                    delay(15)
+                    continue
+                }
                 val floats = FloatArray(read)
                 var sumSq = 0.0
                 for (i in 0 until read) {
@@ -51,8 +54,7 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
                     floats[i] = v
                     sumSq += v * v
                 }
-                val rms = sqrt(sumSq / read).toFloat()
-                emit(AudioChunk(floats, rms, System.currentTimeMillis()))
+                emit(AudioChunk(floats, sqrt(sumSq / read).toFloat(), System.currentTimeMillis()))
             }
         } finally {
             runCatching {
@@ -61,4 +63,25 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    @SuppressLint("MissingPermission")
+    private fun openRecorder(bufferSize: Int): AudioRecord {
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.DEFAULT,
+        )
+        for (source in sources) {
+            val recorder = AudioRecord(
+                source,
+                AudioConfig.SAMPLE_RATE_HZ,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+            )
+            if (recorder.state == AudioRecord.STATE_INITIALIZED) return recorder
+            recorder.release()
+        }
+        error("Microphone failed to initialize")
+    }
 }

@@ -12,6 +12,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,6 +28,7 @@ class SpeechRepositoryImpl @Inject constructor(
 ) : SpeechRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val sessionLock = Mutex()
     private var captureJob: Job? = null
 
     override val transcription: Flow<TranscriptionSnapshot> = streaming.snapshot
@@ -36,25 +40,30 @@ class SpeechRepositoryImpl @Inject constructor(
             ?: error("No speech model selected")
         val path = modelRepository.localPath(model)
         check(File(path).exists()) { "Download a speech model before listening" }
-        if (!whisperEngine.isReady) {
-            whisperEngine.load(path)
-        }
+        whisperEngine.load(path)
     }
 
     override suspend fun start() {
-        stop()
-        streaming.start(scope)
-        captureJob = scope.launch {
-            microphone.stream().collect { chunk ->
-                streaming.push(chunk)
+        sessionLock.withLock {
+            halt()
+            streaming.start(scope)
+            captureJob = scope.launch {
+                microphone.stream().collect { chunk ->
+                    streaming.push(chunk)
+                }
             }
         }
     }
 
     override suspend fun stop() {
+        sessionLock.withLock { halt() }
+    }
+
+    private suspend fun halt() {
         whisperEngine.abort()
+        streaming.stopImmediate()
         captureJob?.cancel()
+        withTimeoutOrNull(400) { captureJob?.join() }
         captureJob = null
-        streaming.stopAndFinalize()
     }
 }

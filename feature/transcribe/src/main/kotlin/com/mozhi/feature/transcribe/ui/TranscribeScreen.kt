@@ -28,8 +28,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -50,8 +54,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,6 +67,7 @@ import com.mozhi.core.designsystem.components.ListenOrb
 import com.mozhi.core.designsystem.theme.MistMuted
 import com.mozhi.core.designsystem.theme.MonsoonTeal
 import com.mozhi.core.designsystem.theme.NightRaised
+import com.mozhi.feature.transcribe.MalayalamCopy
 import com.mozhi.feature.transcribe.TranscribeUiState
 import com.mozhi.feature.transcribe.TranscribeViewModel
 
@@ -82,13 +90,20 @@ fun TranscribeRoute(
         viewModel.onPermissionResult(granted, permanentlyDenied)
     }
 
+    LaunchedEffect(state.catalogLoaded, state.selectedModelReady) {
+        if (state.catalogLoaded && !state.selectedModelReady) {
+            viewModel.onStartupIfModelMissing()
+        }
+    }
+
     TranscribeScreen(
         state = state,
         onToggleListen = {
-            if (state.permissionNeeded) {
-                launcher.launch(Manifest.permission.RECORD_AUDIO)
-            } else {
-                viewModel.onMicToggled(state.permissionPermanentlyDenied)
+            when {
+                state.listening -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
+                !state.selectedModelReady -> viewModel.showModelPrompt()
+                state.permissionNeeded -> launcher.launch(Manifest.permission.RECORD_AUDIO)
+                else -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
             }
         },
         onOpenModels = onOpenModels,
@@ -101,6 +116,8 @@ fun TranscribeRoute(
             )
         },
         onClearError = viewModel::clearError,
+        onDismissPrompt = viewModel::dismissModelPrompt,
+        onConfirmDownload = viewModel::downloadDefaultModel,
     )
 }
 
@@ -111,6 +128,8 @@ fun TranscribeScreen(
     onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
     onClearError: () -> Unit,
+    onDismissPrompt: () -> Unit,
+    onConfirmDownload: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
@@ -120,7 +139,12 @@ fun TranscribeScreen(
         onClearError()
     }
 
-    AuroraBackground(listening = state.snapshot.isListening) {
+    val silentHint = state.listening &&
+        state.snapshot.elapsedMillis > 3_000 &&
+        state.snapshot.audioLevel < 0.03f &&
+        state.snapshot.displayText.isBlank()
+
+    AuroraBackground(listening = state.listening) {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
             Column(
                 Modifier
@@ -134,10 +158,10 @@ fun TranscribeScreen(
                 ) {
                     Column {
                         Text("മൊഴി", style = MaterialTheme.typography.headlineMedium)
-                        Text("Malayalam · on-device", color = MistMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text(MalayalamCopy.AppSubtitle, color = MistMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                     IconButton(onClick = onOpenModels) {
-                        Icon(Icons.Outlined.Tune, contentDescription = "Models")
+                        Icon(Icons.Outlined.Tune, contentDescription = MalayalamCopy.Models)
                     }
                 }
 
@@ -145,7 +169,7 @@ fun TranscribeScreen(
                 LiveTranscriptCard(
                     committed = state.snapshot.committedText,
                     partial = state.snapshot.partialText,
-                    listening = state.snapshot.isListening,
+                    listening = state.listening,
                     processing = state.snapshot.isProcessing,
                     onCopy = {
                         val text = state.snapshot.displayText
@@ -158,7 +182,7 @@ fun TranscribeScreen(
                 StatusRow(state)
                 if (state.permissionPermanentlyDenied) {
                     TextButton(onClick = onOpenSettings) {
-                        Text("Open settings to allow microphone")
+                        Text(MalayalamCopy.OpenMicSettings)
                     }
                 }
                 Column(
@@ -166,23 +190,74 @@ fun TranscribeScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     ListenOrb(
-                        listening = state.snapshot.isListening,
+                        listening = state.listening,
                         audioLevel = state.snapshot.audioLevel,
                         onToggle = onToggleListen,
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
                         text = when {
-                            state.snapshot.isListening -> "Listening — speak Malayalam"
-                            !state.selectedModelReady -> "Download a local model to begin"
-                            state.permissionNeeded -> "Microphone permission required"
-                            else -> "Tap to transcribe"
+                            silentHint -> MalayalamCopy.HintSilent
+                            state.listening -> MalayalamCopy.HintListening
+                            !state.selectedModelReady -> MalayalamCopy.HintNoModel
+                            state.permissionNeeded -> MalayalamCopy.HintPermission
+                            else -> MalayalamCopy.HintTap
                         },
                         color = MistMuted,
+                        textAlign = TextAlign.Center,
                     )
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
+        }
+    }
+
+    if (state.showModelPrompt) {
+        AlertDialog(
+            onDismissRequest = onDismissPrompt,
+            title = { Text(MalayalamCopy.DialogTitle) },
+            text = { Text(MalayalamCopy.DialogBody) },
+            confirmButton = {
+                Button(onClick = onConfirmDownload) { Text(MalayalamCopy.DialogOk) }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel) }
+            },
+        )
+    }
+
+    if (state.downloading) {
+        Dialog(
+            onDismissRequest = {},
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false,
+            ),
+        ) {
+            Column(
+                Modifier
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(NightRaised)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator(color = MonsoonTeal)
+                Spacer(Modifier.height(16.dp))
+                Text(MalayalamCopy.LoaderTitle, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(8.dp))
+                Text(MalayalamCopy.LoaderBody, color = MistMuted, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(16.dp))
+                LinearProgressIndicator(
+                    progress = { state.downloadProgress ?: 0f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MonsoonTeal,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "${(((state.downloadProgress ?: 0f) * 100).toInt()).coerceIn(0, 100)}%",
+                    color = MonsoonTeal,
+                )
+            }
         }
     }
 }
@@ -196,7 +271,7 @@ private fun LiveTranscriptCard(
     onCopy: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val placeholder = if (listening) "ശബ്ദം തിരിച്ചറിയുന്നു…" else "Your Malayalam transcript will stream here."
+    val placeholder = if (listening) MalayalamCopy.PlaceholderListening else MalayalamCopy.PlaceholderIdle
     Column(
         modifier
             .fillMaxWidth()
@@ -210,12 +285,12 @@ private fun LiveTranscriptCard(
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                if (processing) "Decoding…" else if (listening) "Live" else "Transcript",
+                if (processing) MalayalamCopy.Decoding else if (listening) MalayalamCopy.Live else MalayalamCopy.Transcript,
                 color = MonsoonTeal,
                 style = MaterialTheme.typography.labelLarge,
             )
             IconButton(onClick = onCopy) {
-                Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy transcript")
+                Icon(Icons.Outlined.ContentCopy, contentDescription = MalayalamCopy.Copy)
             }
         }
         Box(
@@ -254,9 +329,9 @@ private fun LiveTranscriptCard(
 private fun StatusRow(state: TranscribeUiState) {
     Text(
         text = buildString {
-            append(state.selectedModelName.ifBlank { "No model" })
-            append("  ·  local Whisper")
-            if (state.translationEnabled) append("  ·  cloud translation on")
+            append(state.selectedModelName.ifBlank { MalayalamCopy.NoModel })
+            append("  ·  ")
+            append(MalayalamCopy.LocalWhisper)
         },
         color = MistMuted,
         style = MaterialTheme.typography.bodyMedium,
