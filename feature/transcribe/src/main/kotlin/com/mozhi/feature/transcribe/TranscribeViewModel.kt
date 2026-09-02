@@ -41,7 +41,7 @@ data class TranscribeUiState(
     val downloadProgress: Float? = null,
     val errorMessage: String? = null,
     val translationEnabled: Boolean = false,
-    val debugLine: String = "",
+    val debugLine: String = "open logcat filter MozhiSTT — then tap the mic",
 ) {
     val listening: Boolean get() = sessionActive
 }
@@ -68,6 +68,10 @@ class TranscribeViewModel @Inject constructor(
     private val chrome = MutableStateFlow(SessionChrome())
     private var sessionGeneration = 0
     private var startupPromptShown = false
+
+    init {
+        MozhiLog.i("TranscribeViewModel created")
+    }
 
     val uiState: StateFlow<TranscribeUiState> = combine(
         observeTranscription(),

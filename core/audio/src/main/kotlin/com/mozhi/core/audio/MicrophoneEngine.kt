@@ -40,6 +40,8 @@ class AudioRecordMicrophoneEngine @Inject constructor(
 ) : MicrophoneEngine {
     @SuppressLint("MissingPermission")
     override fun stream(): Flow<AudioChunk> = callbackFlow {
+        MozhiLog.i("stream() starting on ${Thread.currentThread().name}")
+        Log.i(AUDIORECORD_TAG, "mozhi stream() begin")
         val stopFlag = AtomicBoolean(false)
         val recorderRef = AtomicReference<AudioRecord?>(null)
         val started = CompletableDeferred<Unit>()
@@ -55,9 +57,10 @@ class AudioRecordMicrophoneEngine @Inject constructor(
                 val bufferSize = maxOf(minBuf, frameSamples * 2 * 8)
                 MozhiLog.i("AudioRecord minBuf=$minBuf frame=$frameSamples buffer=$bufferSize")
                 Log.i(AUDIORECORD_TAG, "mozhi open minBuf=$minBuf frame=$frameSamples")
+                if (!started.isCompleted) started.complete(Unit)
                 val recorder = openWorkingRecorder(bufferSize, frameSamples)
                 recorderRef.set(recorder)
-                if (!started.isCompleted) started.complete(Unit)
+                MozhiLog.i("mic capture loop starting source ready")
                 val shortBuf = ShortArray(frameSamples)
                 var frames = 0
                 var emptyReads = 0
@@ -140,18 +143,17 @@ class AudioRecordMicrophoneEngine @Inject constructor(
         val sources = intArrayOf(
             MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.CAMCORDER,
-            MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.DEFAULT,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.UNPROCESSED,
         )
         for (source in sources) {
+            MozhiLog.i("trying audio source=$source")
             val recorder = buildRecorder(source, bufferSize) ?: continue
-            try {
-                recorder.startRecording()
-            } catch (t: Throwable) {
-                MozhiLog.w("audio source $source start failed", t)
-                recorder.release()
+            if (!startRecordingTimed(recorder, 1_200)) {
+                MozhiLog.w("audio source $source startRecording timed out or failed")
+                runCatching { recorder.release() }
                 continue
             }
             MozhiLog.i(
@@ -178,6 +180,35 @@ class AudioRecordMicrophoneEngine @Inject constructor(
             ?: error("Microphone failed to initialize")
         last.startRecording()
         return last
+    }
+
+    private fun startRecordingTimed(recorder: AudioRecord, timeoutMs: Long): Boolean {
+        val done = AtomicBoolean(false)
+        val error = AtomicReference<Throwable?>(null)
+        val starter = Thread({
+            try {
+                recorder.startRecording()
+            } catch (t: Throwable) {
+                error.set(t)
+            } finally {
+                done.set(true)
+            }
+        }, "mozhi-mic-start")
+        starter.start()
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (!done.get() && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(20)
+        }
+        if (!done.get()) {
+            MozhiLog.w("startRecording still running after ${timeoutMs}ms")
+            return false
+        }
+        val t = error.get()
+        if (t != null) {
+            MozhiLog.w("startRecording threw", t)
+            return false
+        }
+        return true
     }
 
     @SuppressLint("MissingPermission")

@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.mozhi.app.ui.MozhiAppRoot
+import com.mozhi.core.common.MozhiLog
 import com.mozhi.core.designsystem.theme.MozhiTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -16,6 +17,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        MozhiLog.i("MainActivity.onCreate")
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(0xFF070B18.toInt()),
