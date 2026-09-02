@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -30,16 +31,17 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -50,15 +52,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -74,7 +76,7 @@ import com.mozhi.feature.transcribe.TranscribeViewModel
 
 @Composable
 fun TranscribeRoute(
-    onOpenModels: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onOpenModels: () -> Unit,
     viewModel: TranscribeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -107,7 +109,7 @@ fun TranscribeRoute(
                 else -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
             }
         },
-        onOpenModels = onOpenModels,
+        onOpenModels = viewModel::showModelPrompt,
         onOpenSettings = {
             context.startActivity(
                 Intent(
@@ -118,7 +120,8 @@ fun TranscribeRoute(
         },
         onClearError = viewModel::clearError,
         onDismissPrompt = viewModel::dismissModelPrompt,
-        onConfirmDownload = viewModel::downloadDefaultModel,
+        onApiKeyChange = viewModel::onApiKeyDraftChange,
+        onSaveApiKey = viewModel::saveApiKey,
     )
 }
 
@@ -130,10 +133,22 @@ fun TranscribeScreen(
     onOpenSettings: () -> Unit,
     onClearError: () -> Unit,
     onDismissPrompt: () -> Unit,
-    onConfirmDownload: () -> Unit,
+    onApiKeyChange: (String) -> Unit,
+    onSaveApiKey: () -> Unit,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
+    val view = LocalView.current
+    val keepAwake = state.listening || state.snapshot.isProcessing
+    DisposableEffect(keepAwake) {
+        val window = (view.context as? Activity)?.window
+        if (keepAwake) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
     LaunchedEffect(state.errorMessage) {
         val msg = state.errorMessage ?: return@LaunchedEffect
         snackbar.showSnackbar(msg)
@@ -233,50 +248,36 @@ fun TranscribeScreen(
         AlertDialog(
             onDismissRequest = onDismissPrompt,
             title = { Text(MalayalamCopy.DialogTitle, color = Mist) },
-            text = { Text(MalayalamCopy.DialogBody, color = MistMuted) },
+            text = {
+                Column {
+                    Text(MalayalamCopy.DialogBody, color = MistMuted)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = state.apiKeyDraft,
+                        onValueChange = onApiKeyChange,
+                        label = { Text(MalayalamCopy.KeyLabel) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Mist,
+                            unfocusedTextColor = Mist,
+                            focusedLabelColor = MonsoonTeal,
+                            unfocusedLabelColor = MistMuted,
+                            cursorColor = MonsoonTeal,
+                            focusedBorderColor = MonsoonTeal,
+                            unfocusedBorderColor = MistMuted,
+                        ),
+                    )
+                }
+            },
             confirmButton = {
-                Button(onClick = onConfirmDownload) { Text(MalayalamCopy.DialogOk) }
+                Button(onClick = onSaveApiKey) { Text(MalayalamCopy.DialogOk) }
             },
             dismissButton = {
                 TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel, color = Mist) }
             },
             containerColor = NightRaised,
         )
-    }
-
-    if (state.downloading) {
-        Dialog(
-            onDismissRequest = {},
-            properties = DialogProperties(
-                dismissOnBackPress = false,
-                dismissOnClickOutside = false,
-            ),
-        ) {
-            Column(
-                Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(NightRaised)
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                CircularProgressIndicator(color = MonsoonTeal)
-                Spacer(Modifier.height(16.dp))
-                Text(MalayalamCopy.LoaderTitle, style = MaterialTheme.typography.titleLarge, color = Mist)
-                Spacer(Modifier.height(8.dp))
-                Text(MalayalamCopy.LoaderBody, color = MistMuted, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(16.dp))
-                LinearProgressIndicator(
-                    progress = { state.downloadProgress ?: 0f },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MonsoonTeal,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "${(((state.downloadProgress ?: 0f) * 100).toInt()).coerceIn(0, 100)}%",
-                    color = MonsoonTeal,
-                )
-            }
-        }
     }
 }
 

@@ -1,11 +1,14 @@
 package com.mozhi.data.di
 
+import com.mozhi.domain.repository.GeminiSettingsRepository
 import com.mozhi.domain.repository.ModelRepository
 import com.mozhi.domain.repository.SpeechRepository
 import com.mozhi.domain.repository.TranslationRepository
 import com.mozhi.domain.usecase.DownloadSpeechModelUseCase
+import com.mozhi.domain.usecase.ObserveGeminiApiKeyUseCase
 import com.mozhi.domain.usecase.ObserveModelCatalogUseCase
 import com.mozhi.domain.usecase.ObserveTranscriptionUseCase
+import com.mozhi.domain.usecase.SaveGeminiApiKeyUseCase
 import com.mozhi.domain.usecase.SelectSpeechModelUseCase
 import com.mozhi.domain.usecase.StartListeningUseCase
 import com.mozhi.domain.usecase.StopListeningUseCase
@@ -46,4 +49,12 @@ object UseCaseModule {
     @Provides
     @Singleton
     fun translate(repo: TranslationRepository) = TranslateTranscriptUseCase(repo)
+
+    @Provides
+    @Singleton
+    fun observeGeminiKey(settings: GeminiSettingsRepository) = ObserveGeminiApiKeyUseCase(settings)
+
+    @Provides
+    @Singleton
+    fun saveGeminiKey(settings: GeminiSettingsRepository) = SaveGeminiApiKeyUseCase(settings)
 }

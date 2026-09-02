@@ -74,6 +74,7 @@ class StreamingSpeechToText @Inject constructor(
             for (chunk in channel) {
                 if (stopRequested || session != epoch) continue
                 appendLocked(chunk)
+                maybeLiveTranscribe(scope, session)
             }
         }
         scope.launch {
@@ -128,7 +129,7 @@ class StreamingSpeechToText @Inject constructor(
         whisperEngine.clearAbort()
         val minFlush = AudioConfig.SAMPLE_RATE_HZ
         if (leftover.size >= minFlush) {
-            val clip = loudestWindow(leftover, 5)
+            val clip = loudestWindow(leftover, 3)
             try {
                 MozhiLog.i("flush infer samples=${clip.size} (${clip.size / AudioConfig.SAMPLE_RATE_HZ}s)")
                 runInference(clip, session)
@@ -197,6 +198,33 @@ class StreamingSpeechToText @Inject constructor(
             }
             System.arraycopy(incoming, 0, pcm, pcmSize, incoming.size)
             pcmSize += incoming.size
+        }
+    }
+
+    private fun maybeLiveTranscribe(scope: CoroutineScope, session: Int) {
+        if (stopRequested || session != epoch) return
+        val minLive = AudioConfig.SAMPLE_RATE_HZ * 2
+        if (pcmSize < minLive) return
+        if (!inferring.compareAndSet(false, true)) return
+        val clip = try {
+            FloatArray(minLive).also { dest ->
+                System.arraycopy(pcm, pcmSize - minLive, dest, 0, minLive)
+            }
+        } catch (t: Throwable) {
+            inferring.set(false)
+            return
+        }
+        inferJob = scope.launch(Dispatchers.Default) {
+            try {
+                if (session == epoch && !stopRequested) {
+                    MozhiLog.i("live infer samples=${clip.size}")
+                    runInference(clip, session)
+                }
+            } catch (t: Throwable) {
+                MozhiLog.e("live infer crashed", t)
+            } finally {
+                inferring.set(false)
+            }
         }
     }
 

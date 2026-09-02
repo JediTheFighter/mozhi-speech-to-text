@@ -2,10 +2,9 @@ package com.mozhi.data.repository
 
 import com.mozhi.core.audio.MicrophoneEngine
 import com.mozhi.core.common.MozhiLog
-import com.mozhi.core.stt.StreamingSpeechToText
-import com.mozhi.core.stt.whisper.WhisperEngine
+import com.mozhi.data.stt.GeminiStreamingSpeechToText
 import com.mozhi.domain.model.TranscriptionSnapshot
-import com.mozhi.domain.repository.ModelRepository
+import com.mozhi.domain.repository.GeminiSettingsRepository
 import com.mozhi.domain.repository.SpeechRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -19,16 +18,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class SpeechRepositoryImpl @Inject constructor(
     private val microphone: MicrophoneEngine,
-    private val streaming: StreamingSpeechToText,
-    private val whisperEngine: WhisperEngine,
-    private val modelRepository: ModelRepository,
+    private val streaming: GeminiStreamingSpeechToText,
+    private val geminiSettings: GeminiSettingsRepository,
 ) : SpeechRepository {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -37,23 +34,17 @@ class SpeechRepositoryImpl @Inject constructor(
 
     override val transcription: Flow<TranscriptionSnapshot> = streaming.snapshot
 
-    override fun isEngineReady(): Boolean = whisperEngine.isReady
+    override fun isEngineReady(): Boolean = false
 
     override suspend fun ensureEngineReady() {
-        val model = modelRepository.selectedModel()
-            ?: error("No speech model selected")
-        val path = modelRepository.localPath(model)
-        val file = File(path)
-        MozhiLog.i("ensureEngineReady id=${model.id} path=$path exists=${file.exists()} bytes=${file.length()}")
-        check(file.exists()) { "Download a speech model before listening" }
-        whisperEngine.load(path)
+        check(geminiSettings.apiKey().isNotBlank()) { "Gemini API key missing" }
+        MozhiLog.i("ensureEngineReady gemini cloud")
     }
 
     override suspend fun start() {
         sessionLock.withLock {
-            MozhiLog.i("repo start")
+            MozhiLog.i("repo start gemini")
             halt()
-            whisperEngine.clearAbort()
             streaming.start(scope)
             captureJob = scope.launch {
                 try {

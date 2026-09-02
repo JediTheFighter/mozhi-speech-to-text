@@ -144,6 +144,13 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.logprob_thold = -2.0f;
     params.entropy_thold = 2.8f;
     params.initial_prompt = nullptr;
+    {
+        const int sec = ((int) n + 15999) / 16000;
+        int audio_ctx = sec * 50 + 80;
+        if (audio_ctx < 150) audio_ctx = 150;
+        if (audio_ctx > 1500) audio_ctx = 1500;
+        params.audio_ctx = audio_ctx;
+    }
 
     const char *lang = env->GetStringUTFChars(language, nullptr);
     params.language = lang;
@@ -152,8 +159,8 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.encoder_begin_callback = encoder_begin_callback;
     params.abort_callback = abort_callback;
 
-    LOGI("whisper_full n_samples=%d threads=%d lang=%s abort=%d",
-         (int) n, (int) params.n_threads, lang, (int) g_abort.load());
+    LOGI("whisper_full n_samples=%d audio_ctx=%d threads=%d lang=%s abort=%d",
+         (int) n, (int) params.audio_ctx, (int) params.n_threads, lang, (int) g_abort.load());
     int rc = whisper_full(ctx, params, samples, n);
     env->ReleaseStringUTFChars(language, lang);
     env->ReleaseFloatArrayElements(audio, samples, JNI_ABORT);

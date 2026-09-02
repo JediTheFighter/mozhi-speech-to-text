@@ -7,12 +7,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mozhi.core.common.MozhiLog
-import com.mozhi.domain.catalog.SpeechModelCatalog
 import com.mozhi.domain.model.ListeningState
 import com.mozhi.domain.model.TranscriptionSnapshot
-import com.mozhi.domain.usecase.DownloadSpeechModelUseCase
-import com.mozhi.domain.usecase.ObserveModelCatalogUseCase
+import com.mozhi.domain.usecase.ObserveGeminiApiKeyUseCase
 import com.mozhi.domain.usecase.ObserveTranscriptionUseCase
+import com.mozhi.domain.usecase.SaveGeminiApiKeyUseCase
 import com.mozhi.domain.usecase.StartListeningUseCase
 import com.mozhi.domain.usecase.StopListeningUseCase
 import com.mozhi.domain.usecase.TranslateTranscriptUseCase
@@ -34,13 +33,14 @@ data class TranscribeUiState(
     val permissionNeeded: Boolean = false,
     val permissionPermanentlyDenied: Boolean = false,
     val selectedModelReady: Boolean = false,
-    val catalogLoaded: Boolean = false,
-    val selectedModelName: String = "",
+    val catalogLoaded: Boolean = true,
+    val selectedModelName: String = MalayalamCopy.GeminiEngine,
     val showModelPrompt: Boolean = false,
     val downloading: Boolean = false,
     val downloadProgress: Float? = null,
     val errorMessage: String? = null,
     val translationEnabled: Boolean = false,
+    val apiKeyDraft: String = "",
     val debugLine: String = "open logcat filter MozhiSTT — then tap the mic",
 ) {
     val listening: Boolean get() = sessionActive
@@ -49,41 +49,48 @@ data class TranscribeUiState(
 private data class SessionChrome(
     val active: Boolean = false,
     val showPrompt: Boolean = false,
-    val downloading: Boolean = false,
 )
 
 @HiltViewModel
 class TranscribeViewModel @Inject constructor(
     @ApplicationContext private val app: Context,
     observeTranscription: ObserveTranscriptionUseCase,
-    observeModels: ObserveModelCatalogUseCase,
+    observeGeminiApiKey: ObserveGeminiApiKeyUseCase,
     private val startListening: StartListeningUseCase,
     private val stopListening: StopListeningUseCase,
-    private val downloadModel: DownloadSpeechModelUseCase,
+    private val saveGeminiApiKey: SaveGeminiApiKeyUseCase,
     translateTranscript: TranslateTranscriptUseCase,
 ) : ViewModel() {
 
     private val permissionDeniedForever = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
     private val chrome = MutableStateFlow(SessionChrome())
+    private val apiKeyDraft = MutableStateFlow("")
     private var sessionGeneration = 0
     private var startupPromptShown = false
 
     init {
         MozhiLog.i("TranscribeViewModel created")
+        viewModelScope.launch {
+            observeGeminiApiKey().collect { key ->
+                if (apiKeyDraft.value.isBlank() && key.isNotBlank()) {
+                    apiKeyDraft.value = key
+                }
+            }
+        }
     }
 
     val uiState: StateFlow<TranscribeUiState> = combine(
-        observeTranscription(),
-        observeModels(),
-        permissionDeniedForever,
-        error,
-        chrome,
-    ) { snap, models, deniedForever, err, session ->
-        val selected = models.firstOrNull { it.selected } ?: models.firstOrNull {
-            it.model.id == SpeechModelCatalog.DEFAULT_MODEL_ID
-        }
-        val progress = models.firstOrNull { it.downloadProgress != null }?.downloadProgress
+        combine(observeTranscription(), observeGeminiApiKey(), permissionDeniedForever) { snap, apiKey, deniedForever ->
+            Triple(snap, apiKey, deniedForever)
+        },
+        combine(error, chrome, apiKeyDraft) { err, session, draft ->
+            Triple(err, session, draft)
+        },
+    ) { left, right ->
+        val (snap, apiKey, deniedForever) = left
+        val (err, session, draft) = right
+        val keyReady = apiKey.isNotBlank()
         TranscribeUiState(
             snapshot = snap,
             listeningState = when {
@@ -95,14 +102,13 @@ class TranscribeViewModel @Inject constructor(
             sessionActive = session.active,
             permissionNeeded = !hasMicPermission(),
             permissionPermanentlyDenied = deniedForever,
-            selectedModelReady = selected?.downloaded == true,
-            catalogLoaded = models.isNotEmpty(),
-            selectedModelName = selected?.model?.displayName.orEmpty(),
-            showModelPrompt = session.showPrompt && !session.downloading && selected?.downloaded != true,
-            downloading = session.downloading,
-            downloadProgress = progress ?: if (session.downloading) 0f else null,
+            selectedModelReady = keyReady,
+            catalogLoaded = true,
+            selectedModelName = MalayalamCopy.GeminiEngine,
+            showModelPrompt = session.showPrompt,
             errorMessage = err,
             translationEnabled = translateTranscript.isAvailable,
+            apiKeyDraft = draft,
             debugLine = "orb=${if (session.active) "stop" else "mic"} snapListen=${snap.isListening} proc=${snap.isProcessing} ${snap.debugLine}",
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TranscribeUiState())
@@ -123,24 +129,26 @@ class TranscribeViewModel @Inject constructor(
         chrome.update { it.copy(showPrompt = false) }
     }
 
-    fun downloadDefaultModel() {
-        chrome.update { it.copy(showPrompt = false, downloading = true) }
+    fun onApiKeyDraftChange(value: String) {
+        apiKeyDraft.value = value
+    }
+
+    fun saveApiKey() {
+        val value = apiKeyDraft.value.trim()
+        if (value.isBlank()) {
+            error.value = MalayalamCopy.KeyMissing
+            return
+        }
         viewModelScope.launch {
-            runCatching {
-                downloadModel(SpeechModelCatalog.DEFAULT_MODEL_ID)
-            }.onFailure {
-                error.value = MalayalamCopy.DownloadFailed
-                chrome.update { session -> session.copy(downloading = false, showPrompt = true) }
-            }.onSuccess {
-                chrome.update { session -> session.copy(downloading = false, showPrompt = false) }
-            }
+            saveGeminiApiKey(value)
+            chrome.update { it.copy(showPrompt = false) }
         }
     }
 
     fun onMicToggled(permanentlyDenied: Boolean) {
         permissionDeniedForever.value = permanentlyDenied
         MozhiLog.i(
-            "mic tap active=${chrome.value.active} snapListening=${uiState.value.snapshot.isListening} model=${uiState.value.selectedModelReady}",
+            "mic tap active=${chrome.value.active} snapListening=${uiState.value.snapshot.isListening} ready=${uiState.value.selectedModelReady}",
         )
         if (chrome.value.active) {
             stopSession()

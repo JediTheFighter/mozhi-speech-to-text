@@ -1,7 +1,9 @@
 package com.mozhi.core.stt.whisper
 
-import android.os.Build
+import android.content.Context
+import android.os.PowerManager
 import com.mozhi.core.common.MozhiLog
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
@@ -11,7 +13,9 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 @Singleton
-class WhisperEngine @Inject constructor() {
+class WhisperEngine @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
     @Volatile
     private var ptr: Long = 0L
     @Volatile
@@ -45,34 +49,41 @@ class WhisperEngine @Inject constructor() {
         onPartial: (String) -> Unit,
     ): String {
         MozhiLog.i("whisper waiting for engine n=${samples.size}")
-        return withContext(dispatcher) {
-            check(ptr != 0L) { "Whisper model is not loaded" }
-        var peak = 0f
-        var sumSq = 0.0
-        for (s in samples) {
-            val a = abs(s)
-            if (a > peak) peak = a
-            sumSq += s * s
-        }
-        val rms = sqrt(sumSq / samples.size).toFloat()
-        val boosted = amplify(samples, peak)
-        MozhiLog.i(
-            "whisper decode n=${samples.size} lang=$language peak=${"%.4f".format(peak)} rms=${"%.4f".format(rms)} gain=${"%.2f".format(boosted.second)} boostedPeak=${"%.4f".format(boosted.third)} threads=${preferredThreads()}",
-        )
-        if (peak < 0.02f) {
-            MozhiLog.w("mic level is very low (peak=${"%.4f".format(peak)}); applying gain=${"%.2f".format(boosted.second)}")
-        }
-        WhisperLib.setListener(
-            object : WhisperSegmentListener {
-                override fun onSegment(text: String, isPartial: Boolean) {
-                    if (text.isNotBlank()) onPartial(text.trim())
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "mozhi:whisper")
+        wakeLock.acquire(90_000L)
+        try {
+            return withContext(dispatcher) {
+                check(ptr != 0L) { "Whisper model is not loaded" }
+                var peak = 0f
+                var sumSq = 0.0
+                for (s in samples) {
+                    val a = abs(s)
+                    if (a > peak) peak = a
+                    sumSq += s * s
                 }
-            },
-        )
-        val result = WhisperLib.fullTranscribe(ptr, boosted.first, preferredThreads(), language)
-        WhisperLib.setListener(null)
-            MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
-            result.trim()
+                val rms = sqrt(sumSq / samples.size).toFloat()
+                val boosted = amplify(samples, peak)
+                MozhiLog.i(
+                    "whisper decode n=${samples.size} lang=$language peak=${"%.4f".format(peak)} rms=${"%.4f".format(rms)} gain=${"%.2f".format(boosted.second)} boostedPeak=${"%.4f".format(boosted.third)} threads=${preferredThreads()}",
+                )
+                if (peak < 0.02f) {
+                    MozhiLog.w("mic level is very low (peak=${"%.4f".format(peak)}); applying gain=${"%.2f".format(boosted.second)}")
+                }
+                WhisperLib.setListener(
+                    object : WhisperSegmentListener {
+                        override fun onSegment(text: String, isPartial: Boolean) {
+                            if (text.isNotBlank()) onPartial(text.trim())
+                        }
+                    },
+                )
+                val result = WhisperLib.fullTranscribe(ptr, boosted.first, preferredThreads(), language)
+                WhisperLib.setListener(null)
+                MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
+                result.trim()
+            }
+        } finally {
+            if (wakeLock.isHeld) wakeLock.release()
         }
     }
 

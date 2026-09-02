@@ -18,12 +18,21 @@ class PreferencesStore @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     private val selectedModel = stringPreferencesKey("selected_model_id")
+    private val geminiKey = stringPreferencesKey("gemini_api_key")
 
     val selectedModelId: Flow<String> = context.mozhiStore.data.map { prefs ->
         prefs[selectedModel] ?: SpeechModelCatalog.DEFAULT_MODEL_ID
     }
 
+    val geminiApiKey: Flow<String> = context.mozhiStore.data.map { prefs ->
+        prefs[geminiKey].orEmpty()
+    }
+
     suspend fun setSelectedModel(id: String) {
         context.mozhiStore.edit { it[selectedModel] = id }
+    }
+
+    suspend fun setGeminiApiKey(value: String) {
+        context.mozhiStore.edit { it[geminiKey] = value }
     }
 }
