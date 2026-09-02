@@ -56,6 +56,8 @@ class StreamingSpeechToText @Inject constructor(
         epoch += 1
         val session = epoch
         stopRequested = false
+        inferring.set(false)
+        inferJob = null
         startedAt = System.currentTimeMillis()
         lastInferAt = 0L
         pcmSize = 0
@@ -116,26 +118,38 @@ class StreamingSpeechToText @Inject constructor(
     suspend fun flushAndStop() {
         val session = epoch
         stopImmediate()
+        val leftover = mutex.withLock { pcm.copyOf(pcmSize) }
+        val job = inferJob
         _snapshot.update {
             it.copy(
                 isListening = false,
                 isProcessing = true,
-                debugLine = "decoding ${pcmSize / AudioConfig.SAMPLE_RATE_HZ}s after stop…",
+                debugLine = "decoding ${leftover.size / AudioConfig.SAMPLE_RATE_HZ}s after stop…",
             )
         }
-        MozhiLog.i("flush begin session=$session pcm=$pcmSize inferring=${inferring.get()}")
-        withTimeoutOrNull(25_000) { inferJob?.join() }
-        val leftover = mutex.withLock { pcm.copyOf(pcmSize) }
-        val minFlush = AudioConfig.SAMPLE_RATE_HZ
+        MozhiLog.i(
+            "flush begin session=$session leftover=${leftover.size} inferring=${inferring.get()} jobActive=${job?.isActive} jobDone=${job?.isCompleted}",
+        )
+        if (job?.isActive == true) {
+            val finished = withTimeoutOrNull(8_000) { job.join() }
+            if (finished == null) {
+                MozhiLog.w("live infer still running after 8s, aborting so flush can run")
+                whisperEngine.abort()
+                withTimeoutOrNull(2_000) { job.join() }
+            }
+        }
+        inferring.set(false)
+        whisperEngine.clearAbort()
         val hasText = _snapshot.value.displayText.isNotBlank()
-        if (!hasText && leftover.size >= minFlush && inferring.compareAndSet(false, true)) {
+        val minFlush = AudioConfig.SAMPLE_RATE_HZ
+        if (!hasText && leftover.size >= minFlush) {
+            val clip = lastSeconds(leftover, 8)
             try {
-                MozhiLog.i("flush infer samples=${leftover.size}")
-                runInference(leftover, session)
+                MozhiLog.i("flush infer samples=${clip.size} (${clip.size / AudioConfig.SAMPLE_RATE_HZ}s)")
+                runInference(clip, session)
             } catch (t: Throwable) {
                 MozhiLog.e("flush infer crashed", t)
-            } finally {
-                inferring.set(false)
+                _snapshot.update { it.copy(debugLine = "flush infer crashed: ${t.message}") }
             }
         } else {
             MozhiLog.i("flush skip leftover=${leftover.size} hasText=$hasText")
@@ -147,6 +161,12 @@ class StreamingSpeechToText @Inject constructor(
             it.copy(isListening = false, isProcessing = false, audioLevel = 0f)
         }
         MozhiLog.i("flush done session=$session text='${_snapshot.value.displayText.take(80)}'")
+    }
+
+    private fun lastSeconds(samples: FloatArray, seconds: Int): FloatArray {
+        val keep = AudioConfig.SAMPLE_RATE_HZ * seconds
+        if (samples.size <= keep) return samples
+        return samples.copyOfRange(samples.size - keep, samples.size)
     }
 
     private suspend fun appendLocked(chunk: AudioChunk): FloatArray {
@@ -188,25 +208,34 @@ class StreamingSpeechToText @Inject constructor(
             return
         }
         lastInferAt = now
-        val copy = window.copyOf()
-        var peak = 0f
-        for (s in copy) {
-            val a = if (s < 0) -s else s
-            if (a > peak) peak = a
-        }
-        val queued =
-            "queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s) peak=${"%.4f".format(peak)}"
-        MozhiLog.i(queued)
-        _snapshot.update { it.copy(debugLine = queued) }
-        inferJob = scope.launch(Dispatchers.Default) {
-            try {
-                if (session == epoch) runInference(copy, session)
-            } catch (t: Throwable) {
-                MozhiLog.e("infer crashed", t)
-                _snapshot.update { it.copy(debugLine = "infer crashed: ${t.message}", isProcessing = false) }
-            } finally {
+        try {
+            if (stopRequested || session != epoch) {
                 inferring.set(false)
+                return
             }
+            val copy = window.copyOf()
+            var peak = 0f
+            for (s in copy) {
+                val a = if (s < 0) -s else s
+                if (a > peak) peak = a
+            }
+            val queued =
+                "queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s) peak=${"%.4f".format(peak)}"
+            MozhiLog.i(queued)
+            _snapshot.update { it.copy(debugLine = queued) }
+            inferJob = scope.launch(Dispatchers.Default) {
+                try {
+                    if (session == epoch) runInference(copy, session)
+                } catch (t: Throwable) {
+                    MozhiLog.e("infer crashed", t)
+                    _snapshot.update { it.copy(debugLine = "infer crashed: ${t.message}", isProcessing = false) }
+                } finally {
+                    inferring.set(false)
+                }
+            }
+        } catch (t: Throwable) {
+            inferring.set(false)
+            throw t
         }
     }
 
