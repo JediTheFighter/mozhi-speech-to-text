@@ -59,6 +59,7 @@ class SpeechRepositoryImpl @Inject constructor(
                     }
                 } catch (t: Throwable) {
                     MozhiLog.e("microphone stream ended", t)
+                    streaming.fail("mic stream: ${t.message}")
                 }
             }
         }
@@ -73,7 +74,7 @@ class SpeechRepositoryImpl @Inject constructor(
         whisperEngine.abort()
         streaming.stopImmediate()
         captureJob?.cancel()
-        withTimeoutOrNull(400) { captureJob?.join() }
+        withTimeoutOrNull(1_600) { captureJob?.join() }
         captureJob = null
     }
 }

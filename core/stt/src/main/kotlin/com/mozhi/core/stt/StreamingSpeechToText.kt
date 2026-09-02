@@ -10,7 +10,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,8 +32,8 @@ class StreamingSpeechToText @Inject constructor(
     private val _snapshot = MutableStateFlow(TranscriptionSnapshot())
     val snapshot: StateFlow<TranscriptionSnapshot> = _snapshot.asStateFlow()
 
-    private val chunks = MutableSharedFlow<AudioChunk>(
-        extraBufferCapacity = 32,
+    private var inbox = Channel<AudioChunk>(
+        capacity = 64,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     private val mutex = Mutex()
@@ -64,26 +65,43 @@ class StreamingSpeechToText @Inject constructor(
         )
         MozhiLog.i("stream start session=$session")
         collectJob?.cancel()
+        inbox.close()
+        val channel = Channel<AudioChunk>(capacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+        inbox = channel
         collectJob = scope.launch(Dispatchers.Default) {
-            chunks.collect { chunk ->
-                if (stopRequested || session != epoch) return@collect
+            for (chunk in channel) {
+                if (stopRequested || session != epoch) continue
                 val window = appendLocked(chunk)
                 maybeTranscribe(scope, session, chunk.timestampMs, window)
             }
         }
-    }
-
-    suspend fun push(chunk: AudioChunk) {
-        if (stopRequested) return
-        val n = pushedChunks.incrementAndGet()
-        if (n == 1 || n % 20 == 0) {
-            val msg = "mic chunk #$n rms=${"%.4f".format(chunk.rms)} samples=${chunk.samples.size}"
-            MozhiLog.i(msg)
-            if (n == 1 || n % 40 == 0) {
+        scope.launch {
+            delay(1_500)
+            if (!stopRequested && session == epoch && pushedChunks.get() == 0) {
+                val msg = "NO MIC FRAMES after 1.5s — capture stalled on this phone"
+                MozhiLog.e(msg)
                 _snapshot.update { it.copy(debugLine = msg) }
             }
         }
-        chunks.emit(chunk)
+    }
+
+    fun fail(message: String) {
+        MozhiLog.e(message)
+        _snapshot.update { it.copy(debugLine = message, isProcessing = false) }
+    }
+
+    fun push(chunk: AudioChunk) {
+        if (stopRequested) return
+        val n = pushedChunks.incrementAndGet()
+        if (n == 1 || n % 10 == 0) {
+            val msg = "mic chunk #$n rms=${"%.4f".format(chunk.rms)} samples=${chunk.samples.size}"
+            MozhiLog.i(msg)
+            _snapshot.update { it.copy(debugLine = msg) }
+        }
+        val result = inbox.trySend(chunk)
+        if (result.isClosed) {
+            MozhiLog.w("audio inbox closed, dropped chunk #$n")
+        }
     }
 
     fun stopImmediate() {
@@ -97,6 +115,7 @@ class StreamingSpeechToText @Inject constructor(
         inferJob = null
         inferring.set(false)
         pcmSize = 0
+        inbox.close()
         _snapshot.update {
             it.copy(
                 isListening = false,
