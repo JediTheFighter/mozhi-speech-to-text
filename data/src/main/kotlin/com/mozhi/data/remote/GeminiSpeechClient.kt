@@ -34,11 +34,12 @@ class GeminiSpeechClient @Inject constructor(
         }
         val wav = WavEncoder.pcm16Mono(samples, AudioConfig.SAMPLE_RATE_HZ)
         val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
+        val models = modelsToTry()
         MozhiLog.i(
-            "gemini request wavBytes=${wav.size} samples=${samples.size} keyLen=${apiKey.length}",
+            "gemini request wavBytes=${wav.size} samples=${samples.size} keyLen=${apiKey.length} models=$models",
         )
         var lastError = "Gemini request failed"
-        for (model in MODELS) {
+        for (model in models) {
             val result = callModel(model, b64)
             if (result.isSuccess) {
                 val text = clean(result.getOrThrow())
@@ -125,13 +126,61 @@ class GeminiSpeechClient @Inject constructor(
             .joinToString(" ")
             .trim()
 
+    private fun modelsToTry(): List<String> {
+        val listed = listAvailableModels()
+        val fromCatalog = PREFERRED.filter { wanted ->
+            listed.any { it == wanted || it.endsWith("/$wanted") || it.contains(wanted) }
+        }
+        if (fromCatalog.isNotEmpty()) return fromCatalog.distinct()
+        val flash = listed.map { it.substringAfter("models/") }
+            .filter { it.contains("flash", ignoreCase = true) && !it.contains("tts", ignoreCase = true) }
+        if (flash.isNotEmpty()) return flash.take(6)
+        return PREFERRED
+    }
+
+    private fun listAvailableModels(): List<String> {
+        cachedModels?.let { return it }
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models")
+            .addHeader("x-goog-api-key", apiKey)
+            .get()
+            .build()
+        val names = runCatching {
+            http.newCall(request).execute().use { response ->
+                val raw = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    MozhiLog.w("gemini listModels HTTP ${response.code}: ${raw.take(160)}")
+                    return@use emptyList()
+                }
+                val arr = JSONObject(raw).optJSONArray("models") ?: return@use emptyList()
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val name = arr.optJSONObject(i)?.optString("name").orEmpty()
+                        if (name.isNotBlank()) add(name.substringAfter("models/"))
+                    }
+                }
+            }
+        }.getOrElse {
+            MozhiLog.w("gemini listModels failed: ${it.message}")
+            emptyList()
+        }
+        MozhiLog.i("gemini listModels count=${names.size} sample=${names.take(8)}")
+        cachedModels = names
+        return names
+    }
+
+    @Volatile
+    private var cachedModels: List<String>? = null
+
     private companion object {
         val JSON = "application/json; charset=utf-8".toMediaType()
-        val MODELS = listOf(
+        val PREFERRED = listOf(
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash-lite",
             "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-flash-latest",
-            "gemini-1.5-flash",
         )
         const val PROMPT =
             "Transcribe this audio. The speaker is talking in Malayalam. " +

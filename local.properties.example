@@ -2,5 +2,5 @@
 sdk.dir=/Users/YOU/Library/Android/sdk
 
 # Google AI Studio key (https://aistudio.google.com/apikey). Never commit this file.
-# Rebuild the app after changing this value.
-# GEMINI_API_KEY=AIza...
+# Rebuild the app after changing this value. New keys often start with AQ.
+# GEMINI_API_KEY=AQ....

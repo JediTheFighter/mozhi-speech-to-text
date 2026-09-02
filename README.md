@@ -14,7 +14,9 @@ GEMINI_API_KEY=AIza...
 
 Then **rebuild and reinstall** (`./gradlew :app:assembleDebug`). The key is baked into `BuildConfig` at compile time. There is no in-app paste dialog.
 
-Typical AI Studio keys start with `AIza` and are ~39 characters.
+New Google AI Studio keys start with `AQ.` — that is expected, not a paid plan. Older docs still show `AIza`.
+
+The app lists models your key can actually use (Flash-Lite first). You do **not** need a paid Gemini plan for this app.
 
 ## Build
 
