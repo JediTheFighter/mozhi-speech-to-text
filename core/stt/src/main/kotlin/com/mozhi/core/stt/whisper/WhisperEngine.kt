@@ -43,8 +43,10 @@ class WhisperEngine @Inject constructor() {
         samples: FloatArray,
         language: String,
         onPartial: (String) -> Unit,
-    ): String = withContext(dispatcher) {
-        check(ptr != 0L) { "Whisper model is not loaded" }
+    ): String {
+        MozhiLog.i("whisper waiting for engine n=${samples.size}")
+        return withContext(dispatcher) {
+            check(ptr != 0L) { "Whisper model is not loaded" }
         var peak = 0f
         var sumSq = 0.0
         for (s in samples) {
@@ -69,8 +71,9 @@ class WhisperEngine @Inject constructor() {
         )
         val result = WhisperLib.fullTranscribe(ptr, boosted.first, preferredThreads(), language)
         WhisperLib.setListener(null)
-        MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
-        result.trim()
+            MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
+            result.trim()
+        }
     }
 
     fun abort() {
@@ -103,9 +106,6 @@ class WhisperEngine @Inject constructor() {
 
     private fun preferredThreads(): Int {
         val cores = Runtime.getRuntime().availableProcessors()
-        return when {
-            Build.VERSION.SDK_INT >= 31 -> (cores - 2).coerceIn(2, 6)
-            else -> (cores - 1).coerceIn(2, 4)
-        }
+        return (cores - 1).coerceIn(2, 4)
     }
 }

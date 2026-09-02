@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -74,8 +73,7 @@ class StreamingSpeechToText @Inject constructor(
         collectJob = scope.launch(Dispatchers.Default) {
             for (chunk in channel) {
                 if (stopRequested || session != epoch) continue
-                val window = appendLocked(chunk)
-                maybeTranscribe(scope, session, chunk.timestampMs, window)
+                appendLocked(chunk)
             }
         }
         scope.launch {
@@ -119,31 +117,18 @@ class StreamingSpeechToText @Inject constructor(
         val session = epoch
         stopImmediate()
         val leftover = mutex.withLock { pcm.copyOf(pcmSize) }
-        val job = inferJob
         _snapshot.update {
             it.copy(
                 isListening = false,
                 isProcessing = true,
-                debugLine = "decoding ${leftover.size / AudioConfig.SAMPLE_RATE_HZ}s after stop…",
+                debugLine = "decoding ${leftover.size / AudioConfig.SAMPLE_RATE_HZ}s (keep the app open)…",
             )
         }
-        MozhiLog.i(
-            "flush begin session=$session leftover=${leftover.size} inferring=${inferring.get()} jobActive=${job?.isActive} jobDone=${job?.isCompleted}",
-        )
-        if (job?.isActive == true) {
-            val finished = withTimeoutOrNull(8_000) { job.join() }
-            if (finished == null) {
-                MozhiLog.w("live infer still running after 8s, aborting so flush can run")
-                whisperEngine.abort()
-                withTimeoutOrNull(2_000) { job.join() }
-            }
-        }
-        inferring.set(false)
+        MozhiLog.i("flush begin session=$session leftover=${leftover.size}")
         whisperEngine.clearAbort()
-        val hasText = _snapshot.value.displayText.isNotBlank()
         val minFlush = AudioConfig.SAMPLE_RATE_HZ
-        if (!hasText && leftover.size >= minFlush) {
-            val clip = lastSeconds(leftover, 8)
+        if (leftover.size >= minFlush) {
+            val clip = lastSeconds(leftover, 4)
             try {
                 MozhiLog.i("flush infer samples=${clip.size} (${clip.size / AudioConfig.SAMPLE_RATE_HZ}s)")
                 runInference(clip, session)
@@ -152,11 +137,12 @@ class StreamingSpeechToText @Inject constructor(
                 _snapshot.update { it.copy(debugLine = "flush infer crashed: ${t.message}") }
             }
         } else {
-            MozhiLog.i("flush skip leftover=${leftover.size} hasText=$hasText")
+            MozhiLog.i("flush skip leftover=${leftover.size} (need >=1s)")
         }
         epoch += 1
         pcmSize = 0
         inferJob = null
+        inferring.set(false)
         _snapshot.update {
             it.copy(isListening = false, isProcessing = false, audioLevel = 0f)
         }
@@ -169,7 +155,7 @@ class StreamingSpeechToText @Inject constructor(
         return samples.copyOfRange(samples.size - keep, samples.size)
     }
 
-    private suspend fun appendLocked(chunk: AudioChunk): FloatArray {
+    private suspend fun appendLocked(chunk: AudioChunk) {
         val elapsed = System.currentTimeMillis() - startedAt
         _snapshot.update { current ->
             current.copy(
@@ -177,7 +163,7 @@ class StreamingSpeechToText @Inject constructor(
                 elapsedMillis = elapsed,
             )
         }
-        return mutex.withLock {
+        mutex.withLock {
             val incoming = chunk.samples
             if (pcmSize + incoming.size > pcm.size) {
                 val keep = pcm.size - incoming.size
@@ -186,56 +172,6 @@ class StreamingSpeechToText @Inject constructor(
             }
             System.arraycopy(incoming, 0, pcm, pcmSize, incoming.size)
             pcmSize += incoming.size
-            pcm.copyOf(pcmSize)
-        }
-    }
-
-    private fun maybeTranscribe(scope: CoroutineScope, session: Int, now: Long, window: FloatArray) {
-        if (stopRequested || session != epoch) return
-        val strideMs = AudioConfig.STRIDE_SECONDS * 1000L
-        val minSamples = AudioConfig.SAMPLE_RATE_HZ * AudioConfig.MIN_INFER_SECONDS
-        if (window.size < minSamples) {
-            if (pushedChunks.get() % 20 == 0) {
-                val msg = "waiting for audio ${window.size}/$minSamples samples"
-                MozhiLog.i(msg)
-                _snapshot.update { it.copy(debugLine = msg) }
-            }
-            return
-        }
-        if (now - lastInferAt < strideMs && lastInferAt != 0L) return
-        if (!inferring.compareAndSet(false, true)) {
-            MozhiLog.d("skip infer, previous still running")
-            return
-        }
-        lastInferAt = now
-        try {
-            if (stopRequested || session != epoch) {
-                inferring.set(false)
-                return
-            }
-            val copy = window.copyOf()
-            var peak = 0f
-            for (s in copy) {
-                val a = if (s < 0) -s else s
-                if (a > peak) peak = a
-            }
-            val queued =
-                "queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s) peak=${"%.4f".format(peak)}"
-            MozhiLog.i(queued)
-            _snapshot.update { it.copy(debugLine = queued) }
-            inferJob = scope.launch(Dispatchers.Default) {
-                try {
-                    if (session == epoch) runInference(copy, session)
-                } catch (t: Throwable) {
-                    MozhiLog.e("infer crashed", t)
-                    _snapshot.update { it.copy(debugLine = "infer crashed: ${t.message}", isProcessing = false) }
-                } finally {
-                    inferring.set(false)
-                }
-            }
-        } catch (t: Throwable) {
-            inferring.set(false)
-            throw t
         }
     }
 

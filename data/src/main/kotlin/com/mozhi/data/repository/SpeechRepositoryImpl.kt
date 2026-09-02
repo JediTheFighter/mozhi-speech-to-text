@@ -11,11 +11,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import javax.inject.Inject
@@ -78,6 +80,8 @@ class SpeechRepositoryImpl @Inject constructor(
         captureJob?.cancel()
         withTimeoutOrNull(1_600) { captureJob?.join() }
         captureJob = null
-        streaming.flushAndStop()
+        withContext(NonCancellable) {
+            streaming.flushAndStop()
+        }
     }
 }
