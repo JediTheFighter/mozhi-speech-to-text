@@ -1,6 +1,7 @@
 package com.mozhi.data.repository
 
 import com.mozhi.core.audio.MicrophoneEngine
+import com.mozhi.core.common.MozhiLog
 import com.mozhi.core.stt.StreamingSpeechToText
 import com.mozhi.core.stt.whisper.WhisperEngine
 import com.mozhi.domain.model.TranscriptionSnapshot
@@ -39,23 +40,31 @@ class SpeechRepositoryImpl @Inject constructor(
         val model = modelRepository.selectedModel()
             ?: error("No speech model selected")
         val path = modelRepository.localPath(model)
-        check(File(path).exists()) { "Download a speech model before listening" }
+        val file = File(path)
+        MozhiLog.i("ensureEngineReady id=${model.id} path=$path exists=${file.exists()} bytes=${file.length()}")
+        check(file.exists()) { "Download a speech model before listening" }
         whisperEngine.load(path)
     }
 
     override suspend fun start() {
         sessionLock.withLock {
+            MozhiLog.i("repo start")
             halt()
             streaming.start(scope)
             captureJob = scope.launch {
-                microphone.stream().collect { chunk ->
-                    streaming.push(chunk)
+                try {
+                    microphone.stream().collect { chunk ->
+                        streaming.push(chunk)
+                    }
+                } catch (t: Throwable) {
+                    MozhiLog.e("microphone stream ended", t)
                 }
             }
         }
     }
 
     override suspend fun stop() {
+        MozhiLog.i("repo stop")
         sessionLock.withLock { halt() }
     }
 

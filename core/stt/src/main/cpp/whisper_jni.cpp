@@ -63,6 +63,7 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_mozhi_core_stt_whisper_WhisperLib_initContext(
         JNIEnv *env, jclass, jstring model_path) {
     const char *path = env->GetStringUTFChars(model_path, nullptr);
+    LOGI("initContext path=%s", path);
     whisper_context_params cparams = whisper_context_default_params();
     cparams.use_gpu = false;
     struct whisper_context *ctx = whisper_init_from_file_with_params(path, cparams);
@@ -101,6 +102,7 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_setListener(
 extern "C" JNIEXPORT void JNICALL
 Java_com_mozhi_core_stt_whisper_WhisperLib_requestAbort(
         JNIEnv *, jclass) {
+    LOGI("requestAbort");
     g_abort.store(true);
 }
 
@@ -137,12 +139,14 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.encoder_begin_callback = encoder_begin_callback;
     params.abort_callback = abort_callback;
 
+    LOGI("whisper_full n_samples=%d threads=%d lang=%s abort=%d",
+         (int) n, (int) params.n_threads, lang, (int) g_abort.load());
     int rc = whisper_full(ctx, params, samples, n);
     env->ReleaseStringUTFChars(language, lang);
     env->ReleaseFloatArrayElements(audio, samples, JNI_ABORT);
 
     if (rc != 0) {
-        LOGE("whisper_full failed: %d", rc);
+        LOGE("whisper_full failed: %d abort=%d", rc, (int) g_abort.load());
         return env->NewStringUTF("");
     }
 
@@ -152,6 +156,7 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
         const char *text = whisper_full_get_segment_text(ctx, i);
         if (text) out += text;
     }
+    LOGI("whisper_full ok segments=%d chars=%zu text='%s'", segs, out.size(), out.c_str());
     return env->NewStringUTF(out.c_str());
 }
 

@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import com.mozhi.core.common.AudioConfig
+import com.mozhi.core.common.MozhiLog
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -30,14 +31,26 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
         check(minBuf > 0) { "Microphone is not available on this device" }
         val frameSamples = AudioConfig.SAMPLE_RATE_HZ / 10
         val bufferSize = maxOf(minBuf, frameSamples * 2 * 8)
+        MozhiLog.i("AudioRecord minBuf=$minBuf frame=$frameSamples buffer=$bufferSize")
         val recorder = openRecorder(bufferSize)
+        MozhiLog.i("AudioRecord started state=${recorder.state} recording=${recorder.recordingState}")
         recorder.startRecording()
+        MozhiLog.i("AudioRecord recordingState=${recorder.recordingState}")
+        var frames = 0
+        var emptyReads = 0
         val reader = Thread({
             val shortBuf = ShortArray(frameSamples)
             try {
                 while (!Thread.currentThread().isInterrupted) {
                     val read = recorder.read(shortBuf, 0, shortBuf.size)
-                    if (read <= 0) continue
+                    if (read <= 0) {
+                        emptyReads++
+                        if (emptyReads == 1 || emptyReads % 50 == 0) {
+                            MozhiLog.w("AudioRecord read=$read emptyCount=$emptyReads")
+                        }
+                        continue
+                    }
+                    emptyReads = 0
                     val floats = FloatArray(read)
                     var sumSq = 0.0
                     for (i in 0 until read) {
@@ -46,11 +59,17 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
                         sumSq += v * v
                     }
                     val rms = sqrt(sumSq / read).toFloat()
+                    frames++
+                    if (frames == 1 || frames % 25 == 0) {
+                        MozhiLog.d("mic frame=$frames read=$read rms=${"%.4f".format(rms)}")
+                    }
                     val result = trySend(AudioChunk(floats, rms, System.currentTimeMillis()))
                     if (result.isClosed) break
                 }
-            } catch (_: SecurityException) {
-            } catch (_: IllegalStateException) {
+            } catch (t: SecurityException) {
+                MozhiLog.e("mic security", t)
+            } catch (t: IllegalStateException) {
+                MozhiLog.e("mic illegal state", t)
             }
         }, "mozhi-mic")
         reader.start()
@@ -79,7 +98,11 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
                 AudioFormat.ENCODING_PCM_16BIT,
                 bufferSize,
             )
-            if (recorder.state == AudioRecord.STATE_INITIALIZED) return recorder
+            if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                MozhiLog.i("using audio source=$source")
+                return recorder
+            }
+            MozhiLog.w("audio source $source failed to init")
             recorder.release()
         }
         error("Microphone failed to initialize")

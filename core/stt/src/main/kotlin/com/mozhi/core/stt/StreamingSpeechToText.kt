@@ -2,6 +2,7 @@ package com.mozhi.core.stt
 
 import com.mozhi.core.audio.AudioChunk
 import com.mozhi.core.common.AudioConfig
+import com.mozhi.core.common.MozhiLog
 import com.mozhi.core.stt.whisper.WhisperEngine
 import com.mozhi.domain.model.TranscriptionSnapshot
 import com.mozhi.domain.transcription.TranscriptMerger
@@ -18,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
@@ -42,6 +44,7 @@ class StreamingSpeechToText @Inject constructor(
     private var inferJob: Job? = null
     private var startedAt = 0L
     private val inferring = AtomicBoolean(false)
+    private val pushedChunks = AtomicInteger(0)
     @Volatile
     private var stopRequested = false
     @Volatile
@@ -54,11 +57,13 @@ class StreamingSpeechToText @Inject constructor(
         startedAt = System.currentTimeMillis()
         lastInferAt = 0L
         pcmSize = 0
+        pushedChunks.set(0)
         _snapshot.value = TranscriptionSnapshot(isListening = true)
+        MozhiLog.i("stream start session=$session")
         collectJob?.cancel()
         collectJob = scope.launch(Dispatchers.Default) {
             chunks.collect { chunk ->
-                if (stopRequested) return@collect
+                if (stopRequested || session != epoch) return@collect
                 val window = appendLocked(chunk)
                 maybeTranscribe(scope, session, chunk.timestampMs, window)
             }
@@ -66,10 +71,16 @@ class StreamingSpeechToText @Inject constructor(
     }
 
     suspend fun push(chunk: AudioChunk) {
-        if (!stopRequested) chunks.emit(chunk)
+        if (stopRequested) return
+        val n = pushedChunks.incrementAndGet()
+        if (n == 1 || n % 20 == 0) {
+            MozhiLog.d("audio chunk #$n rms=${"%.4f".format(chunk.rms)} samples=${chunk.samples.size}")
+        }
+        chunks.emit(chunk)
     }
 
     fun stopImmediate() {
+        val stopped = epoch
         epoch += 1
         stopRequested = true
         whisperEngine.abort()
@@ -82,14 +93,14 @@ class StreamingSpeechToText @Inject constructor(
         _snapshot.update {
             it.copy(isListening = false, isProcessing = false, audioLevel = 0f)
         }
+        MozhiLog.i("stream stop session=$stopped chunks=${pushedChunks.get()}")
     }
 
     private suspend fun appendLocked(chunk: AudioChunk): FloatArray {
         val elapsed = System.currentTimeMillis() - startedAt
-        _snapshot.update {
-            it.copy(
-                isListening = !stopRequested,
-                audioLevel = (it.audioLevel * 0.45f + chunk.rms * 3.2f).coerceIn(0f, 1f),
+        _snapshot.update { current ->
+            current.copy(
+                audioLevel = (current.audioLevel * 0.45f + chunk.rms * 3.2f).coerceIn(0f, 1f),
                 elapsedMillis = elapsed,
             )
         }
@@ -110,14 +121,25 @@ class StreamingSpeechToText @Inject constructor(
         if (stopRequested || session != epoch) return
         val strideMs = AudioConfig.STRIDE_SECONDS * 1000L
         val minSamples = AudioConfig.SAMPLE_RATE_HZ * AudioConfig.MIN_INFER_SECONDS
-        if (window.size < minSamples) return
+        if (window.size < minSamples) {
+            if (pushedChunks.get() % 20 == 0) {
+                MozhiLog.d("waiting for audio window=${window.size} need=$minSamples")
+            }
+            return
+        }
         if (now - lastInferAt < strideMs && lastInferAt != 0L) return
-        if (!inferring.compareAndSet(false, true)) return
+        if (!inferring.compareAndSet(false, true)) {
+            MozhiLog.d("skip infer, previous still running")
+            return
+        }
         lastInferAt = now
         val copy = window.copyOf()
+        MozhiLog.i("queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s)")
         inferJob = scope.launch(Dispatchers.Default) {
             try {
                 if (!stopRequested && session == epoch) runInference(copy, session)
+            } catch (t: Throwable) {
+                MozhiLog.e("infer crashed", t)
             } finally {
                 inferring.set(false)
             }
@@ -127,22 +149,26 @@ class StreamingSpeechToText @Inject constructor(
     private suspend fun runInference(samples: FloatArray, session: Int) {
         if (stopRequested || session != epoch) return
         _snapshot.update { it.copy(isProcessing = true) }
+        val started = System.currentTimeMillis()
         val raw = runCatching {
             whisperEngine.transcribe(samples, AudioConfig.LANGUAGE_CODE) { partial ->
                 if (stopRequested || session != epoch) return@transcribe
+                MozhiLog.d("partial='${partial.take(80)}'")
                 _snapshot.update { current ->
                     val merged = TranscriptMerger.merge(current.committedText, partial)
                     current.copy(
                         committedText = merged.committed,
                         partialText = merged.partial,
                         isProcessing = true,
-                        isListening = !stopRequested,
                     )
                 }
             }
-        }.getOrDefault("")
+        }.onFailure { MozhiLog.e("transcribe failed", it) }.getOrDefault("")
+        val elapsed = System.currentTimeMillis() - started
+        MozhiLog.i("infer done session=$session ms=$elapsed text='${raw.take(120)}' len=${raw.length}")
         if (stopRequested || session != epoch) {
-            _snapshot.update { it.copy(isListening = session == epoch && !stopRequested, isProcessing = false, audioLevel = 0f) }
+            MozhiLog.w("infer discarded after stop session=$session epoch=$epoch")
+            _snapshot.update { it.copy(isProcessing = false) }
             return
         }
         _snapshot.update { current ->
@@ -151,7 +177,6 @@ class StreamingSpeechToText @Inject constructor(
                 committedText = merged.committed,
                 partialText = merged.partial,
                 isProcessing = false,
-                isListening = true,
             )
         }
     }

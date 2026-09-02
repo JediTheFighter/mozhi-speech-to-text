@@ -105,7 +105,7 @@ fun ListenOrb(
                 }
             } else {
                 drawCircle(
-                    color = MonsoonTeal.copy(alpha = 0.12f),
+                    color = MonsoonTeal.copy(alpha = 0.35f),
                     radius = radius * 0.62f,
                     center = center,
                     style = Stroke(width = 8f),

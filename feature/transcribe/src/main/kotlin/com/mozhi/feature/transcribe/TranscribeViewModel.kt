@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mozhi.core.common.MozhiLog
 import com.mozhi.domain.catalog.SpeechModelCatalog
 import com.mozhi.domain.model.ListeningState
 import com.mozhi.domain.model.TranscriptionSnapshot
@@ -41,7 +42,7 @@ data class TranscribeUiState(
     val errorMessage: String? = null,
     val translationEnabled: Boolean = false,
 ) {
-    val listening: Boolean get() = sessionActive || snapshot.isListening
+    val listening: Boolean get() = sessionActive
 }
 
 private data class SessionChrome(
@@ -132,7 +133,10 @@ class TranscribeViewModel @Inject constructor(
 
     fun onMicToggled(permanentlyDenied: Boolean) {
         permissionDeniedForever.value = permanentlyDenied
-        if (chrome.value.active || uiState.value.snapshot.isListening) {
+        MozhiLog.i(
+            "mic tap active=${chrome.value.active} snapListening=${uiState.value.snapshot.isListening} model=${uiState.value.selectedModelReady}",
+        )
+        if (chrome.value.active) {
             stopSession()
             return
         }
@@ -164,15 +168,18 @@ class TranscribeViewModel @Inject constructor(
         val generation = ++sessionGeneration
         chrome.update { it.copy(active = true) }
         error.value = null
+        MozhiLog.i("startSession gen=$generation")
         viewModelScope.launch {
             runCatching { startListening() }
                 .onFailure { t ->
+                    MozhiLog.e("startSession failed gen=$generation", t)
                     if (generation == sessionGeneration) {
                         chrome.update { it.copy(active = false) }
                         error.value = t.message ?: MalayalamCopy.StartFailed
                     }
                 }
                 .onSuccess {
+                    MozhiLog.i("startSession engine ready gen=$generation current=$sessionGeneration")
                     if (generation != sessionGeneration) {
                         runCatching { stopListening() }
                     }
@@ -183,8 +190,10 @@ class TranscribeViewModel @Inject constructor(
     private fun stopSession() {
         sessionGeneration++
         chrome.update { it.copy(active = false) }
+        MozhiLog.i("stopSession gen=$sessionGeneration")
         viewModelScope.launch {
             runCatching { stopListening() }
+                .onFailure { MozhiLog.e("stopSession failed", it) }
         }
     }
 
