@@ -4,6 +4,7 @@ import android.util.Base64
 import com.mozhi.core.common.AudioConfig
 import com.mozhi.core.common.MozhiLog
 import com.mozhi.data.di.GeminiApiKey
+import com.mozhi.domain.transcription.TranscriptScript
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -34,16 +35,38 @@ class GeminiSpeechClient @Inject constructor(
         }
         val wav = WavEncoder.pcm16Mono(samples, AudioConfig.SAMPLE_RATE_HZ)
         val b64 = Base64.encodeToString(wav, Base64.NO_WRAP)
+        val parts = JSONArray()
+            .put(JSONObject().put("text", TRANSCRIBE_PROMPT))
+            .put(
+                JSONObject().put(
+                    "inline_data",
+                    JSONObject()
+                        .put("mime_type", "audio/wav")
+                        .put("data", b64),
+                ),
+            )
+        var text = generate(parts)
+        if (TranscriptScript.needsMalayalamRewrite(text)) {
+            MozhiLog.i("gemini rewrite script devanagari=${TranscriptScript.hasDevanagari(text)}")
+            text = generate(
+                JSONArray().put(JSONObject().put("text", "$REWRITE_PROMPT\n\n$text")),
+            ).ifBlank { text }
+        }
+        MozhiLog.i("gemini transcript chars=${text.length} text='${text.take(80)}'")
+        text
+    }
+
+    private fun generate(parts: JSONArray): String {
         val tried = linkedSetOf<String>()
         var model = PRIMARY_MODEL
         var lastError = "Gemini request failed"
         while (tried.add(model)) {
-            MozhiLog.i("gemini request model=$model wavBytes=${wav.size} samples=${samples.size}")
-            val result = callModel(model, b64)
+            MozhiLog.i("gemini request model=$model")
+            val result = callModel(model, parts)
             if (result.isSuccess) {
                 val text = clean(result.getOrThrow())
-                MozhiLog.i("gemini ok model=$model chars=${text.length} text='${text.take(80)}'")
-                return@withContext text
+                MozhiLog.i("gemini ok model=$model chars=${text.length}")
+                return text
             }
             lastError = result.exceptionOrNull()?.message ?: lastError
             MozhiLog.w("gemini model=$model failed: $lastError")
@@ -57,26 +80,13 @@ class GeminiSpeechClient @Inject constructor(
         error(lastError)
     }
 
-    private fun callModel(model: String, b64: String): Result<String> = runCatching {
+    private fun callModel(model: String, parts: JSONArray): Result<String> = runCatching {
         val body = JSONObject()
             .put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray()
-                            .put(JSONObject().put("text", PROMPT))
-                            .put(
-                                JSONObject().put(
-                                    "inline_data",
-                                    JSONObject()
-                                        .put("mime_type", "audio/wav")
-                                        .put("data", b64),
-                                ),
-                            ),
-                    ),
-                ),
+                "systemInstruction",
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))),
             )
+            .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
             .put(
                 "generationConfig",
                 JSONObject()
@@ -140,9 +150,25 @@ class GeminiSpeechClient @Inject constructor(
         val JSON = "application/json; charset=utf-8".toMediaType()
         const val PRIMARY_MODEL = "gemini-3.5-flash-lite"
         val SUGGESTED_MODEL = Regex("use models/([a-zA-Z0-9._-]+)", RegexOption.IGNORE_CASE)
-        const val PROMPT =
-            "Transcribe this audio. The speaker is talking in Malayalam. " +
-                "Return only the Malayalam (Malayalam script) transcript of what was spoken. " +
-                "No English translation, no labels, no markdown."
+        const val SYSTEM =
+            "You are a Malayalam speech transcriber for Kerala Malayalam (language code ml). " +
+                "Never write Hindi, Tamil, Telugu, or Devanagari. " +
+                "Malayalam words always use Malayalam script (മലയാളം ലിപി)."
+        const val TRANSCRIBE_PROMPT =
+            "Transcribe this audio from a Malayalam speaker in Kerala. " +
+                "The speech may be Manglish: Malayalam mixed with English words, " +
+                "or Malayalam pronounced / spoken in a romanized way.\n" +
+                "Rules:\n" +
+                "1. Write every Malayalam word in Malayalam script. Decode romanized Malayalam " +
+                "(example: njan, ente, poyi, alle) into Malayalam letters, not Hindi and not English spelling.\n" +
+                "2. Keep true English words as English (WhatsApp, Google, meeting, office, OK) when the speaker said English.\n" +
+                "3. Do not output Devanagari. If a word sounds like Hindi, still write Malayalam if the speaker is Malayalam.\n" +
+                "4. Return only the transcript. No translation, labels, or markdown."
+        const val REWRITE_PROMPT =
+            "Rewrite this transcript into Kerala Malayalam. " +
+                "Convert Hindi/Devanagari into Malayalam script. " +
+                "Convert romanized Malayalam (Manglish) into Malayalam script. " +
+                "Keep real English words in English. " +
+                "Return only the rewritten transcript."
     }
 }
