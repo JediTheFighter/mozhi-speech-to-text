@@ -349,13 +349,24 @@ private fun LiveTranscriptCard(
 
 @Composable
 private fun StatusRow(state: TranscribeUiState) {
-    Text(
-        text = buildString {
-            append(state.selectedModelName.ifBlank { MalayalamCopy.NoModel })
-            append("  ·  ")
-            append(MalayalamCopy.LocalWhisper)
-        },
-        color = MistMuted,
-        style = MaterialTheme.typography.bodyMedium,
-    )
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            text = buildString {
+                append(state.selectedModelName.ifBlank { MalayalamCopy.NoModel })
+                append("  ·  ")
+                append(MalayalamCopy.LocalWhisper)
+            },
+            color = MistMuted,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        if (state.debugLine.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = state.debugLine,
+                color = MonsoonTeal.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 3,
+            )
+        }
+    }
 }

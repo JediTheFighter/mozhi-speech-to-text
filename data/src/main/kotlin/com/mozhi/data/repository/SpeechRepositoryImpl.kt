@@ -50,6 +50,7 @@ class SpeechRepositoryImpl @Inject constructor(
         sessionLock.withLock {
             MozhiLog.i("repo start")
             halt()
+            whisperEngine.clearAbort()
             streaming.start(scope)
             captureJob = scope.launch {
                 try {

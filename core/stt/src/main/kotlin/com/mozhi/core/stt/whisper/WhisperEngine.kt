@@ -68,13 +68,17 @@ class WhisperEngine @Inject constructor() {
         )
         val result = WhisperLib.fullTranscribe(ptr, samples, preferredThreads(), language)
         WhisperLib.setListener(null)
-        MozhiLog.i("whisper native result='${result.take(160)}'")
+        MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
         result.trim()
     }
 
     fun abort() {
         MozhiLog.i("whisper abort requested ready=$isReady")
         if (ptr != 0L) WhisperLib.requestAbort()
+    }
+
+    fun clearAbort() {
+        WhisperLib.clearAbort()
     }
 
     suspend fun release() = withContext(dispatcher) {

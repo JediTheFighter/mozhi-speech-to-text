@@ -64,6 +64,9 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
                         MozhiLog.d("mic frame=$frames read=$read rms=${"%.4f".format(rms)}")
                     }
                     val result = trySend(AudioChunk(floats, rms, System.currentTimeMillis()))
+                    if (!result.isSuccess && frames % 25 == 0) {
+                        MozhiLog.w("mic trySend dropped frame=$frames closed=${result.isClosed}")
+                    }
                     if (result.isClosed) break
                 }
             } catch (t: SecurityException) {
@@ -86,8 +89,9 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
     @SuppressLint("MissingPermission")
     private fun openRecorder(bufferSize: Int): AudioRecord {
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.DEFAULT,
         )
         for (source in sources) {

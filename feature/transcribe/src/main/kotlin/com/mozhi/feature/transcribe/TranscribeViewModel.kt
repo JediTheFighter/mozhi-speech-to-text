@@ -41,6 +41,7 @@ data class TranscribeUiState(
     val downloadProgress: Float? = null,
     val errorMessage: String? = null,
     val translationEnabled: Boolean = false,
+    val debugLine: String = "",
 ) {
     val listening: Boolean get() = sessionActive
 }
@@ -98,6 +99,7 @@ class TranscribeViewModel @Inject constructor(
             downloadProgress = progress ?: if (session.downloading) 0f else null,
             errorMessage = err,
             translationEnabled = translateTranscript.isAvailable,
+            debugLine = "orb=${if (session.active) "stop" else "mic"} snapListen=${snap.isListening} proc=${snap.isProcessing} ${snap.debugLine}",
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TranscribeUiState())
 

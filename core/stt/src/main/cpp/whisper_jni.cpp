@@ -106,6 +106,13 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_requestAbort(
     g_abort.store(true);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_mozhi_core_stt_whisper_WhisperLib_clearAbort(
+        JNIEnv *, jclass) {
+    LOGI("clearAbort was=%d", (int) g_abort.load());
+    g_abort.store(false);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
         JNIEnv *env, jclass, jlong ptr, jfloatArray audio, jint threads, jstring language) {
@@ -130,7 +137,9 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.offset_ms = 0;
     params.duration_ms = 0;
     params.temperature = 0.0f;
-    params.suppress_blank = true;
+    params.suppress_blank = false;
+    params.suppress_nst = false;
+    params.initial_prompt = "മലയാളം.";
 
     const char *lang = env->GetStringUTFChars(language, nullptr);
     params.language = lang;

@@ -17,6 +17,7 @@ internal object WhisperLib {
     @JvmStatic external fun freeContext(ptr: Long)
     @JvmStatic external fun setListener(listener: WhisperSegmentListener?)
     @JvmStatic external fun requestAbort()
+    @JvmStatic external fun clearAbort()
     @JvmStatic external fun fullTranscribe(
         ptr: Long,
         audio: FloatArray,

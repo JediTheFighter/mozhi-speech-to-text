@@ -58,7 +58,10 @@ class StreamingSpeechToText @Inject constructor(
         lastInferAt = 0L
         pcmSize = 0
         pushedChunks.set(0)
-        _snapshot.value = TranscriptionSnapshot(isListening = true)
+        _snapshot.value = TranscriptionSnapshot(
+            isListening = true,
+            debugLine = "session $session started — waiting for mic audio",
+        )
         MozhiLog.i("stream start session=$session")
         collectJob?.cancel()
         collectJob = scope.launch(Dispatchers.Default) {
@@ -74,7 +77,11 @@ class StreamingSpeechToText @Inject constructor(
         if (stopRequested) return
         val n = pushedChunks.incrementAndGet()
         if (n == 1 || n % 20 == 0) {
-            MozhiLog.d("audio chunk #$n rms=${"%.4f".format(chunk.rms)} samples=${chunk.samples.size}")
+            val msg = "mic chunk #$n rms=${"%.4f".format(chunk.rms)} samples=${chunk.samples.size}"
+            MozhiLog.i(msg)
+            if (n == 1 || n % 40 == 0) {
+                _snapshot.update { it.copy(debugLine = msg) }
+            }
         }
         chunks.emit(chunk)
     }
@@ -91,7 +98,12 @@ class StreamingSpeechToText @Inject constructor(
         inferring.set(false)
         pcmSize = 0
         _snapshot.update {
-            it.copy(isListening = false, isProcessing = false, audioLevel = 0f)
+            it.copy(
+                isListening = false,
+                isProcessing = false,
+                audioLevel = 0f,
+                debugLine = "stopped session=$stopped chunks=${pushedChunks.get()}",
+            )
         }
         MozhiLog.i("stream stop session=$stopped chunks=${pushedChunks.get()}")
     }
@@ -123,7 +135,9 @@ class StreamingSpeechToText @Inject constructor(
         val minSamples = AudioConfig.SAMPLE_RATE_HZ * AudioConfig.MIN_INFER_SECONDS
         if (window.size < minSamples) {
             if (pushedChunks.get() % 20 == 0) {
-                MozhiLog.d("waiting for audio window=${window.size} need=$minSamples")
+                val msg = "waiting for audio ${window.size}/$minSamples samples"
+                MozhiLog.i(msg)
+                _snapshot.update { it.copy(debugLine = msg) }
             }
             return
         }
@@ -134,12 +148,21 @@ class StreamingSpeechToText @Inject constructor(
         }
         lastInferAt = now
         val copy = window.copyOf()
-        MozhiLog.i("queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s)")
+        var peak = 0f
+        for (s in copy) {
+            val a = if (s < 0) -s else s
+            if (a > peak) peak = a
+        }
+        val queued =
+            "queue infer session=$session samples=${copy.size} (${copy.size / AudioConfig.SAMPLE_RATE_HZ}s) peak=${"%.4f".format(peak)}"
+        MozhiLog.i(queued)
+        _snapshot.update { it.copy(debugLine = queued) }
         inferJob = scope.launch(Dispatchers.Default) {
             try {
                 if (!stopRequested && session == epoch) runInference(copy, session)
             } catch (t: Throwable) {
                 MozhiLog.e("infer crashed", t)
+                _snapshot.update { it.copy(debugLine = "infer crashed: ${t.message}", isProcessing = false) }
             } finally {
                 inferring.set(false)
             }
@@ -153,7 +176,7 @@ class StreamingSpeechToText @Inject constructor(
         val raw = runCatching {
             whisperEngine.transcribe(samples, AudioConfig.LANGUAGE_CODE) { partial ->
                 if (stopRequested || session != epoch) return@transcribe
-                MozhiLog.d("partial='${partial.take(80)}'")
+                MozhiLog.i("partial='${partial.take(80)}'")
                 _snapshot.update { current ->
                     val merged = TranscriptMerger.merge(current.committedText, partial)
                     current.copy(
@@ -163,9 +186,18 @@ class StreamingSpeechToText @Inject constructor(
                     )
                 }
             }
-        }.onFailure { MozhiLog.e("transcribe failed", it) }.getOrDefault("")
+        }.onFailure {
+            MozhiLog.e("transcribe failed", it)
+            _snapshot.update { current -> current.copy(debugLine = "transcribe failed: ${it.message}") }
+        }.getOrDefault("")
         val elapsed = System.currentTimeMillis() - started
-        MozhiLog.i("infer done session=$session ms=$elapsed text='${raw.take(120)}' len=${raw.length}")
+        val done = if (raw.isBlank()) {
+            "infer ${elapsed}ms EMPTY text — logcat MozhiSTT / MozhiWhisper"
+        } else {
+            "infer ${elapsed}ms len=${raw.length} text='${raw.take(80)}'"
+        }
+        MozhiLog.i("infer done session=$session $done")
+        _snapshot.update { it.copy(debugLine = done) }
         if (stopRequested || session != epoch) {
             MozhiLog.w("infer discarded after stop session=$session epoch=$epoch")
             _snapshot.update { it.copy(isProcessing = false) }
