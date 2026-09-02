@@ -53,11 +53,12 @@ class WhisperEngine @Inject constructor() {
             sumSq += s * s
         }
         val rms = sqrt(sumSq / samples.size).toFloat()
+        val boosted = amplify(samples, peak)
         MozhiLog.i(
-            "whisper decode n=${samples.size} lang=$language peak=${"%.4f".format(peak)} rms=${"%.4f".format(rms)} threads=${preferredThreads()}",
+            "whisper decode n=${samples.size} lang=$language peak=${"%.4f".format(peak)} rms=${"%.4f".format(rms)} gain=${"%.2f".format(boosted.second)} boostedPeak=${"%.4f".format(boosted.third)} threads=${preferredThreads()}",
         )
-        if (peak < 0.005f) {
-            MozhiLog.w("audio looks silent, whisper may return empty")
+        if (peak < 0.02f) {
+            MozhiLog.w("mic level is very low (peak=${"%.4f".format(peak)}); applying gain=${"%.2f".format(boosted.second)}")
         }
         WhisperLib.setListener(
             object : WhisperSegmentListener {
@@ -66,7 +67,7 @@ class WhisperEngine @Inject constructor() {
                 }
             },
         )
-        val result = WhisperLib.fullTranscribe(ptr, samples, preferredThreads(), language)
+        val result = WhisperLib.fullTranscribe(ptr, boosted.first, preferredThreads(), language)
         WhisperLib.setListener(null)
         MozhiLog.i("whisper native result='${result.take(160)}' blank=${result.isBlank()}")
         result.trim()
@@ -87,6 +88,17 @@ class WhisperEngine @Inject constructor() {
             ptr = 0L
             loadedPath = null
         }
+    }
+
+    private fun amplify(samples: FloatArray, peak: Float): Triple<FloatArray, Float, Float> {
+        if (peak < 1e-6f) return Triple(samples, 1f, peak)
+        val target = 0.5f
+        if (peak >= 0.2f) return Triple(samples, 1f, peak)
+        val gain = (target / peak).coerceAtMost(30f)
+        val out = FloatArray(samples.size) { i ->
+            (samples[i] * gain).coerceIn(-1f, 1f)
+        }
+        return Triple(out, gain, (peak * gain).coerceAtMost(1f))
     }
 
     private fun preferredThreads(): Int {

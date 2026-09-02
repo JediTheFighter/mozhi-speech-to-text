@@ -3,7 +3,6 @@ package com.mozhi.core.audio
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
@@ -45,12 +44,7 @@ class AudioRecordMicrophoneEngine @Inject constructor(
         val recorderRef = AtomicReference<AudioRecord?>(null)
         val started = CompletableDeferred<Unit>()
         val reader = Thread({
-            val audioManager = context.getSystemService(AudioManager::class.java)
-            val previousMode = audioManager?.mode ?: AudioManager.MODE_NORMAL
             try {
-                runCatching {
-                    audioManager?.mode = AudioManager.MODE_IN_COMMUNICATION
-                }
                 val minBuf = AudioRecord.getMinBufferSize(
                     AudioConfig.SAMPLE_RATE_HZ,
                     AudioFormat.CHANNEL_IN_MONO,
@@ -91,8 +85,12 @@ class AudioRecordMicrophoneEngine @Inject constructor(
                     val floats = FloatArray(read)
                     var sumSq = 0.0
                     var peak = 0f
+                    var intPeak = 0
                     for (i in 0 until read) {
-                        val v = shortBuf[i] / 32768f
+                        val sample = shortBuf[i]
+                        val mag = if (sample < 0) -sample else sample.toInt()
+                        if (mag > intPeak) intPeak = mag
+                        val v = sample / 32768f
                         floats[i] = v
                         sumSq += v * v
                         val a = if (v < 0) -v else v
@@ -101,7 +99,7 @@ class AudioRecordMicrophoneEngine @Inject constructor(
                     val rms = sqrt(sumSq / read).toFloat()
                     frames++
                     if (frames == 1 || frames % 10 == 0) {
-                        val msg = "mic frame=$frames read=$read rms=${"%.4f".format(rms)} peak=${"%.4f".format(peak)}"
+                        val msg = "mic frame=$frames read=$read rms=${"%.4f".format(rms)} peak=${"%.4f".format(peak)} intPeak=$intPeak"
                         MozhiLog.i(msg)
                         Log.i(AUDIORECORD_TAG, "mozhi $msg")
                     }
@@ -119,7 +117,6 @@ class AudioRecordMicrophoneEngine @Inject constructor(
                     runCatching { rec.stop() }
                     runCatching { rec.release() }
                 }
-                runCatching { audioManager?.mode = previousMode }
             }
         }, "mozhi-mic")
         reader.start()
@@ -141,12 +138,12 @@ class AudioRecordMicrophoneEngine @Inject constructor(
     @SuppressLint("MissingPermission")
     private fun openWorkingRecorder(bufferSize: Int, frameSamples: Int): AudioRecord {
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.CAMCORDER,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.DEFAULT,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
         )
         for (source in sources) {
             val recorder = buildRecorder(source, bufferSize) ?: continue

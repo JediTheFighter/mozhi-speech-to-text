@@ -7,6 +7,7 @@ import com.mozhi.core.stt.whisper.WhisperEngine
 import com.mozhi.domain.model.TranscriptionSnapshot
 import com.mozhi.domain.repository.ModelRepository
 import com.mozhi.domain.repository.SpeechRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,6 +58,9 @@ class SpeechRepositoryImpl @Inject constructor(
                     microphone.stream().collect { chunk ->
                         streaming.push(chunk)
                     }
+                } catch (t: CancellationException) {
+                    MozhiLog.i("microphone stream cancelled")
+                    throw t
                 } catch (t: Throwable) {
                     MozhiLog.e("microphone stream ended", t)
                     streaming.fail("mic stream: ${t.message}")

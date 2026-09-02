@@ -130,16 +130,20 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.print_special = false;
     params.translate = false;
     params.no_context = true;
-    params.single_segment = false;
+    params.single_segment = true;
     params.no_timestamps = true;
     params.max_tokens = 0;
     params.n_threads = threads > 0 ? threads : 4;
     params.offset_ms = 0;
     params.duration_ms = 0;
     params.temperature = 0.0f;
+    params.temperature_inc = 0.2f;
     params.suppress_blank = false;
     params.suppress_nst = false;
-    params.initial_prompt = "മലയാളം.";
+    params.no_speech_thold = 1.0f;
+    params.logprob_thold = -2.0f;
+    params.entropy_thold = 2.8f;
+    params.initial_prompt = nullptr;
 
     const char *lang = env->GetStringUTFChars(language, nullptr);
     params.language = lang;
@@ -161,11 +165,15 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
 
     std::string out;
     const int segs = whisper_full_n_segments(ctx);
+            float max_nsp = 0.f;
     for (int i = 0; i < segs; ++i) {
         const char *text = whisper_full_get_segment_text(ctx, i);
         if (text) out += text;
+        const float nsp = whisper_full_get_segment_no_speech_prob(ctx, i);
+        if (nsp > max_nsp) max_nsp = nsp;
     }
-    LOGI("whisper_full ok segments=%d chars=%zu text='%s'", segs, out.size(), out.c_str());
+    LOGI("whisper_full ok segments=%d chars=%zu nsp=%.3f lang_id=%d text='%s'",
+         segs, out.size(), max_nsp, whisper_full_lang_id(ctx), out.c_str());
     return env->NewStringUTF(out.c_str());
 }
 
