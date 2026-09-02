@@ -129,7 +129,6 @@ Java_com_mozhi_core_stt_whisper_WhisperLib_fullTranscribe(
     params.duration_ms = 0;
     params.temperature = 0.0f;
     params.suppress_blank = true;
-    params.suppress_non_speech_tokens = true;
 
     const char *lang = env->GetStringUTFChars(language, nullptr);
     params.language = lang;
