@@ -15,7 +15,7 @@ object MalayalamCopy {
     const val HintTap = "മൈക്ക് തൊട്ട് സംസാരിക്കാം"
     const val OpenMicSettings = "ക്രമീകരണത്തിൽ മൈക്രോഫോൺ അനുവദിക്കുക"
     const val LocalWhisper = "ക്ലൗഡ് Gemini Flash"
-    const val GeminiEngine = "Gemini Flash"
+    const val GeminiEngine = "Gemini 3.5 Flash-Lite"
     const val NoModel = "കീ ഇല്ല"
     const val KeyMissing = "GEMINI_API_KEY local.properties-ൽ ഇട്ട് ആപ്പ് rebuild ചെയ്യുക"
     const val PermissionDenied = "സംസാരം തിരിച്ചറിയാൻ മൈക്രോഫോൺ അനുമതി വേണം."

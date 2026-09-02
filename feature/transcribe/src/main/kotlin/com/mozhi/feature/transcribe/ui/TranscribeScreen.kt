@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -71,7 +70,6 @@ import com.mozhi.feature.transcribe.TranscribeViewModel
 
 @Composable
 fun TranscribeRoute(
-    onOpenModels: () -> Unit,
     viewModel: TranscribeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -98,7 +96,6 @@ fun TranscribeRoute(
                 else -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
             }
         },
-        onOpenModels = onOpenModels,
         onOpenSettings = {
             context.startActivity(
                 Intent(
@@ -115,7 +112,6 @@ fun TranscribeRoute(
 fun TranscribeScreen(
     state: TranscribeUiState,
     onToggleListen: () -> Unit,
-    onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
     onClearError: () -> Unit,
 ) {
@@ -147,7 +143,6 @@ fun TranscribeScreen(
             ) {
                 Row(
                     Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
@@ -160,13 +155,6 @@ fun TranscribeScreen(
                             MalayalamCopy.AppSubtitle,
                             color = MistMuted,
                             style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    IconButton(onClick = onOpenModels) {
-                        Icon(
-                            Icons.Outlined.Tune,
-                            contentDescription = MalayalamCopy.Models,
-                            tint = Mist,
                         )
                     }
                 }
