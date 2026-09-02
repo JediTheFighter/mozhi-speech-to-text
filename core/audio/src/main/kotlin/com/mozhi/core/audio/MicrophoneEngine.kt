@@ -4,15 +4,12 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import android.os.Build
 import com.mozhi.core.common.AudioConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.sqrt
@@ -24,7 +21,7 @@ interface MicrophoneEngine {
 @Singleton
 class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
     @SuppressLint("MissingPermission")
-    override fun stream(): Flow<AudioChunk> = flow {
+    override fun stream(): Flow<AudioChunk> = callbackFlow {
         val minBuf = AudioRecord.getMinBufferSize(
             AudioConfig.SAMPLE_RATE_HZ,
             AudioFormat.CHANNEL_IN_MONO,
@@ -34,41 +31,44 @@ class AudioRecordMicrophoneEngine @Inject constructor() : MicrophoneEngine {
         val frameSamples = AudioConfig.SAMPLE_RATE_HZ / 10
         val bufferSize = maxOf(minBuf, frameSamples * 2 * 8)
         val recorder = openRecorder(bufferSize)
-        val shortBuf = ShortArray(frameSamples)
         recorder.startRecording()
-        try {
-            while (currentCoroutineContext().isActive) {
-                val read = if (Build.VERSION.SDK_INT >= 23) {
-                    recorder.read(shortBuf, 0, shortBuf.size, AudioRecord.READ_NON_BLOCKING)
-                } else {
-                    recorder.read(shortBuf, 0, shortBuf.size)
+        val reader = Thread({
+            val shortBuf = ShortArray(frameSamples)
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val read = recorder.read(shortBuf, 0, shortBuf.size)
+                    if (read <= 0) continue
+                    val floats = FloatArray(read)
+                    var sumSq = 0.0
+                    for (i in 0 until read) {
+                        val v = shortBuf[i] / 32768f
+                        floats[i] = v
+                        sumSq += v * v
+                    }
+                    val rms = sqrt(sumSq / read).toFloat()
+                    val result = trySend(AudioChunk(floats, rms, System.currentTimeMillis()))
+                    if (result.isClosed) break
                 }
-                if (read <= 0) {
-                    delay(15)
-                    continue
-                }
-                val floats = FloatArray(read)
-                var sumSq = 0.0
-                for (i in 0 until read) {
-                    val v = shortBuf[i] / 32768f
-                    floats[i] = v
-                    sumSq += v * v
-                }
-                emit(AudioChunk(floats, sqrt(sumSq / read).toFloat(), System.currentTimeMillis()))
+            } catch (_: SecurityException) {
+            } catch (_: IllegalStateException) {
             }
-        } finally {
+        }, "mozhi-mic")
+        reader.start()
+        awaitClose {
+            reader.interrupt()
             runCatching {
                 recorder.stop()
                 recorder.release()
             }
+            reader.join(400)
         }
-    }.flowOn(Dispatchers.IO)
+    }.buffer(capacity = 32, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     @SuppressLint("MissingPermission")
     private fun openRecorder(bufferSize: Int): AudioRecord {
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.DEFAULT,
         )
         for (source in sources) {

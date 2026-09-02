@@ -1,5 +1,6 @@
 <resources>
     <color name="night_ink">#070B18</color>
+    <color name="mist">#E8EEF9</color>
     <color name="monsoon_teal">#2DD4BF</color>
     <color name="lotus_gold">#E8C547</color>
 </resources>

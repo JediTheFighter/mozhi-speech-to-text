@@ -64,6 +64,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.core.designsystem.background.AuroraBackground
 import com.mozhi.core.designsystem.components.ListenOrb
+import com.mozhi.core.designsystem.theme.Mist
 import com.mozhi.core.designsystem.theme.MistMuted
 import com.mozhi.core.designsystem.theme.MonsoonTeal
 import com.mozhi.core.designsystem.theme.NightRaised
@@ -139,11 +140,6 @@ fun TranscribeScreen(
         onClearError()
     }
 
-    val silentHint = state.listening &&
-        state.snapshot.elapsedMillis > 3_000 &&
-        state.snapshot.audioLevel < 0.03f &&
-        state.snapshot.displayText.isBlank()
-
     AuroraBackground(listening = state.listening) {
         Box(Modifier.fillMaxSize().statusBarsPadding()) {
             Column(
@@ -157,11 +153,23 @@ fun TranscribeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("മൊഴി", style = MaterialTheme.typography.headlineMedium)
-                        Text(MalayalamCopy.AppSubtitle, color = MistMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "മൊഴി",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = Mist,
+                        )
+                        Text(
+                            MalayalamCopy.AppSubtitle,
+                            color = MistMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                     IconButton(onClick = onOpenModels) {
-                        Icon(Icons.Outlined.Tune, contentDescription = MalayalamCopy.Models)
+                        Icon(
+                            Icons.Outlined.Tune,
+                            contentDescription = MalayalamCopy.Models,
+                            tint = Mist,
+                        )
                     }
                 }
 
@@ -180,13 +188,15 @@ fun TranscribeScreen(
 
                 Spacer(Modifier.height(12.dp))
                 StatusRow(state)
-                if (state.permissionPermanentlyDenied) {
-                    TextButton(onClick = onOpenSettings) {
-                        Text(MalayalamCopy.OpenMicSettings)
+                Box(Modifier.height(36.dp)) {
+                    if (state.permissionPermanentlyDenied) {
+                        TextButton(onClick = onOpenSettings) {
+                            Text(MalayalamCopy.OpenMicSettings, color = MonsoonTeal)
+                        }
                     }
                 }
                 Column(
-                    Modifier.fillMaxWidth().padding(bottom = 28.dp, top = 8.dp),
+                    Modifier.fillMaxWidth().padding(bottom = 28.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     ListenOrb(
@@ -195,17 +205,24 @@ fun TranscribeScreen(
                         onToggle = onToggleListen,
                     )
                     Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = when {
-                            silentHint -> MalayalamCopy.HintSilent
-                            state.listening -> MalayalamCopy.HintListening
-                            !state.selectedModelReady -> MalayalamCopy.HintNoModel
-                            state.permissionNeeded -> MalayalamCopy.HintPermission
-                            else -> MalayalamCopy.HintTap
-                        },
-                        color = MistMuted,
-                        textAlign = TextAlign.Center,
-                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        contentAlignment = Alignment.TopCenter,
+                    ) {
+                        Text(
+                            text = when {
+                                state.listening -> MalayalamCopy.HintListening
+                                !state.selectedModelReady -> MalayalamCopy.HintNoModel
+                                state.permissionNeeded -> MalayalamCopy.HintPermission
+                                else -> MalayalamCopy.HintTap
+                            },
+                            color = MistMuted,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                        )
+                    }
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
@@ -215,14 +232,15 @@ fun TranscribeScreen(
     if (state.showModelPrompt) {
         AlertDialog(
             onDismissRequest = onDismissPrompt,
-            title = { Text(MalayalamCopy.DialogTitle) },
-            text = { Text(MalayalamCopy.DialogBody) },
+            title = { Text(MalayalamCopy.DialogTitle, color = Mist) },
+            text = { Text(MalayalamCopy.DialogBody, color = MistMuted) },
             confirmButton = {
                 Button(onClick = onConfirmDownload) { Text(MalayalamCopy.DialogOk) }
             },
             dismissButton = {
-                TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel) }
+                TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel, color = Mist) }
             },
+            containerColor = NightRaised,
         )
     }
 
@@ -243,7 +261,7 @@ fun TranscribeScreen(
             ) {
                 CircularProgressIndicator(color = MonsoonTeal)
                 Spacer(Modifier.height(16.dp))
-                Text(MalayalamCopy.LoaderTitle, style = MaterialTheme.typography.titleLarge)
+                Text(MalayalamCopy.LoaderTitle, style = MaterialTheme.typography.titleLarge, color = Mist)
                 Spacer(Modifier.height(8.dp))
                 Text(MalayalamCopy.LoaderBody, color = MistMuted, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
@@ -290,7 +308,11 @@ private fun LiveTranscriptCard(
                 style = MaterialTheme.typography.labelLarge,
             )
             IconButton(onClick = onCopy) {
-                Icon(Icons.Outlined.ContentCopy, contentDescription = MalayalamCopy.Copy)
+                Icon(
+                    Icons.Outlined.ContentCopy,
+                    contentDescription = MalayalamCopy.Copy,
+                    tint = Mist,
+                )
             }
         }
         Box(

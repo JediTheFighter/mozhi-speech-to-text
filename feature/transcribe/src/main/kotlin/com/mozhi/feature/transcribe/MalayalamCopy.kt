@@ -15,7 +15,6 @@ object MalayalamCopy {
     const val HintNoModel = "ആദ്യം Whisper മോഡൽ ഡൗൺലോഡ് ചെയ്യുക"
     const val HintPermission = "മൈക്രോഫോൺ അനുമതി ആവശ്യമാണ്"
     const val HintTap = "മൈക്ക് തൊട്ട് സംസാരിക്കാം"
-    const val HintSilent = "മൈക്കിൽ ശബ്ദം കിട്ടുന്നില്ല. എമുലേറ്റർ Extended controls-ൽ Microphone ഓണാക്കുക."
     const val OpenMicSettings = "ക്രമീകരണത്തിൽ മൈക്രോഫോൺ അനുവദിക്കുക"
     const val LocalWhisper = "പ്രാദേശിക Whisper"
     const val NoModel = "മോഡൽ ഇല്ല"
