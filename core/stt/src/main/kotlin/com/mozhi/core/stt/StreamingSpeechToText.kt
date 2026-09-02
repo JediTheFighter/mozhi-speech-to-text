@@ -128,7 +128,7 @@ class StreamingSpeechToText @Inject constructor(
         whisperEngine.clearAbort()
         val minFlush = AudioConfig.SAMPLE_RATE_HZ
         if (leftover.size >= minFlush) {
-            val clip = lastSeconds(leftover, 4)
+            val clip = loudestWindow(leftover, 5)
             try {
                 MozhiLog.i("flush infer samples=${clip.size} (${clip.size / AudioConfig.SAMPLE_RATE_HZ}s)")
                 runInference(clip, session)
@@ -149,10 +149,35 @@ class StreamingSpeechToText @Inject constructor(
         MozhiLog.i("flush done session=$session text='${_snapshot.value.displayText.take(80)}'")
     }
 
-    private fun lastSeconds(samples: FloatArray, seconds: Int): FloatArray {
-        val keep = AudioConfig.SAMPLE_RATE_HZ * seconds
-        if (samples.size <= keep) return samples
-        return samples.copyOfRange(samples.size - keep, samples.size)
+    private fun loudestWindow(samples: FloatArray, seconds: Int): FloatArray {
+        val keep = (AudioConfig.SAMPLE_RATE_HZ * seconds).coerceAtMost(samples.size)
+        if (samples.size <= keep) {
+            MozhiLog.i("energy window using full buffer samples=${samples.size}")
+            return samples
+        }
+        val hop = AudioConfig.SAMPLE_RATE_HZ / 10
+        var bestStart = 0
+        var bestEnergy = -1.0
+        var start = 0
+        while (start + keep <= samples.size) {
+            var energy = 0.0
+            var i = start
+            val end = start + keep
+            while (i < end) {
+                val v = samples[i]
+                energy += v * v
+                i++
+            }
+            if (energy > bestEnergy) {
+                bestEnergy = energy
+                bestStart = start
+            }
+            start += hop
+        }
+        MozhiLog.i(
+            "energy window startMs=${bestStart * 1000 / AudioConfig.SAMPLE_RATE_HZ} lenMs=${keep * 1000 / AudioConfig.SAMPLE_RATE_HZ} energy=${"%.4f".format(bestEnergy / keep)}",
+        )
+        return samples.copyOfRange(bestStart, bestStart + keep)
     }
 
     private suspend fun appendLocked(chunk: AudioChunk) {

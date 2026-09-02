@@ -97,7 +97,7 @@ class WhisperEngine @Inject constructor() {
         if (peak < 1e-6f) return Triple(samples, 1f, peak)
         val target = 0.5f
         if (peak >= 0.2f) return Triple(samples, 1f, peak)
-        val gain = (target / peak).coerceAtMost(30f)
+        val gain = (target / peak).coerceAtMost(6f)
         val out = FloatArray(samples.size) { i ->
             (samples[i] * gain).coerceIn(-1f, 1f)
         }
