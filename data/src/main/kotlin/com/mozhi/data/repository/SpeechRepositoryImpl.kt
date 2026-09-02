@@ -75,10 +75,9 @@ class SpeechRepositoryImpl @Inject constructor(
     }
 
     private suspend fun halt() {
-        whisperEngine.abort()
-        streaming.stopImmediate()
         captureJob?.cancel()
         withTimeoutOrNull(1_600) { captureJob?.join() }
         captureJob = null
+        streaming.flushAndStop()
     }
 }

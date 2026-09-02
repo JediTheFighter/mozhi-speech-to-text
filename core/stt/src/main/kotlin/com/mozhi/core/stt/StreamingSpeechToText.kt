@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
@@ -105,26 +106,47 @@ class StreamingSpeechToText @Inject constructor(
     }
 
     fun stopImmediate() {
-        val stopped = epoch
-        epoch += 1
-        stopRequested = true
-        whisperEngine.abort()
         collectJob?.cancel()
         collectJob = null
-        inferJob?.cancel()
-        inferJob = null
-        inferring.set(false)
-        pcmSize = 0
         inbox.close()
+        stopRequested = true
+        MozhiLog.i("capture stopped session=$epoch chunks=${pushedChunks.get()} pcm=$pcmSize")
+    }
+
+    suspend fun flushAndStop() {
+        val session = epoch
+        stopImmediate()
         _snapshot.update {
             it.copy(
                 isListening = false,
-                isProcessing = false,
-                audioLevel = 0f,
-                debugLine = "stopped session=$stopped chunks=${pushedChunks.get()}",
+                isProcessing = true,
+                debugLine = "decoding ${pcmSize / AudioConfig.SAMPLE_RATE_HZ}s after stop…",
             )
         }
-        MozhiLog.i("stream stop session=$stopped chunks=${pushedChunks.get()}")
+        MozhiLog.i("flush begin session=$session pcm=$pcmSize inferring=${inferring.get()}")
+        withTimeoutOrNull(25_000) { inferJob?.join() }
+        val leftover = mutex.withLock { pcm.copyOf(pcmSize) }
+        val minFlush = AudioConfig.SAMPLE_RATE_HZ
+        val hasText = _snapshot.value.displayText.isNotBlank()
+        if (!hasText && leftover.size >= minFlush && inferring.compareAndSet(false, true)) {
+            try {
+                MozhiLog.i("flush infer samples=${leftover.size}")
+                runInference(leftover, session)
+            } catch (t: Throwable) {
+                MozhiLog.e("flush infer crashed", t)
+            } finally {
+                inferring.set(false)
+            }
+        } else {
+            MozhiLog.i("flush skip leftover=${leftover.size} hasText=$hasText")
+        }
+        epoch += 1
+        pcmSize = 0
+        inferJob = null
+        _snapshot.update {
+            it.copy(isListening = false, isProcessing = false, audioLevel = 0f)
+        }
+        MozhiLog.i("flush done session=$session text='${_snapshot.value.displayText.take(80)}'")
     }
 
     private suspend fun appendLocked(chunk: AudioChunk): FloatArray {
@@ -178,7 +200,7 @@ class StreamingSpeechToText @Inject constructor(
         _snapshot.update { it.copy(debugLine = queued) }
         inferJob = scope.launch(Dispatchers.Default) {
             try {
-                if (!stopRequested && session == epoch) runInference(copy, session)
+                if (session == epoch) runInference(copy, session)
             } catch (t: Throwable) {
                 MozhiLog.e("infer crashed", t)
                 _snapshot.update { it.copy(debugLine = "infer crashed: ${t.message}", isProcessing = false) }
@@ -189,12 +211,15 @@ class StreamingSpeechToText @Inject constructor(
     }
 
     private suspend fun runInference(samples: FloatArray, session: Int) {
-        if (stopRequested || session != epoch) return
+        if (session != epoch) {
+            MozhiLog.w("infer skipped stale session=$session epoch=$epoch")
+            return
+        }
         _snapshot.update { it.copy(isProcessing = true) }
         val started = System.currentTimeMillis()
         val raw = runCatching {
             whisperEngine.transcribe(samples, AudioConfig.LANGUAGE_CODE) { partial ->
-                if (stopRequested || session != epoch) return@transcribe
+                if (session != epoch) return@transcribe
                 MozhiLog.i("partial='${partial.take(80)}'")
                 _snapshot.update { current ->
                     val merged = TranscriptMerger.merge(current.committedText, partial)
@@ -217,8 +242,8 @@ class StreamingSpeechToText @Inject constructor(
         }
         MozhiLog.i("infer done session=$session $done")
         _snapshot.update { it.copy(debugLine = done) }
-        if (stopRequested || session != epoch) {
-            MozhiLog.w("infer discarded after stop session=$session epoch=$epoch")
+        if (session != epoch) {
+            MozhiLog.w("infer discarded stale session=$session epoch=$epoch")
             _snapshot.update { it.copy(isProcessing = false) }
             return
         }
