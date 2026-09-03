@@ -1,58 +1,39 @@
 # മൊഴി (Mozhi) — Malayalam speech to text
 
-On-device Malayalam transcription in Jetpack Compose. Audio never leaves the phone for STT.
-Cloud translation is a later, optional module.
+Malayalam transcription in Jetpack Compose. Listen UI is the same orb + transcript card.
+Speech is recorded on the phone, then sent once to **Gemini Flash** when you tap stop.
 
-## Architecture
+## Gemini API key
+
+Put a [Google AI Studio](https://aistudio.google.com/apikey) key in gitignored `local.properties`:
 
 ```
-app                UI host, Hilt, navigation
-feature:transcribe Live listen UI, permission flow
-feature:models     Hugging Face GGML downloads
-domain             Use cases, models, TranscriptMerger
-data               Repositories, OkHttp downloader, DataStore
-core:stt           whisper.cpp JNI + sliding-window streaming
-core:audio         AudioRecord 16 kHz mono
-core:translation   TranslationEngine (disabled / cloud stub)
-core:designsystem  Aurora background, listen orb
-core:common        AudioConfig
+sdk.dir=/Users/YOU/Library/Android/sdk
+GEMINI_API_KEY=AIza...
 ```
 
-## Requirements
+Then **rebuild and reinstall** (`./gradlew :app:assembleDebug`). The key is baked into `BuildConfig` at compile time. There is no in-app paste dialog.
 
-- Android Studio Ladybug+ / AGP 8.8
-- JDK 17, NDK + CMake (SDK Manager)
-- Phone or emulator with microphone (`arm64-v8a` or `x86_64`)
+New Google AI Studio keys start with `AQ.` — that is expected, not a paid plan. Older docs still show `AIza`.
+
+The app lists models your key can actually use (Flash-Lite first). You do **not** need a paid Gemini plan for this app.
 
 ## Build
 
 ```bash
-chmod +x gradlew scripts/setup-native.sh
-# Optional: vendor whisper.cpp instead of CMake FetchContent
-./scripts/setup-native.sh
-
-# Point at your SDK
+chmod +x gradlew
 cp local.properties.example local.properties
+# set sdk.dir and GEMINI_API_KEY
 
 ./gradlew :domain:test
 ./gradlew :app:assembleDebug
 ```
 
-First native build fetches [whisper.cpp v1.7.5](https://github.com/ggml-org/whisper.cpp) and
-compiles `libmozhi-whisper.so`. Then open the app, download **Whisper Tiny Q5_1** (~31 MB from
-Hugging Face), grant the microphone permission, and speak Malayalam.
+Grant the microphone, tap the orb, speak Malayalam, tap stop. Keep the app open until the transcript card fills or shows an error.
+
+Do not commit API keys.
 
 ## Permissions
 
-- `RECORD_AUDIO` is requested in the listen flow with rationale and a Settings deep link when
-  permanently denied.
-- `INTERNET` is only for model download (HTTPS Hugging Face). Transcription is local.
-
-## Custom Malayalam models
-
-See [docs/MODELS.md](docs/MODELS.md) for Hugging Face picks, sizes, and GGML conversion.
-
-## Cloud translation later
-
-Replace the Hilt bind in `core/translation` from `DisabledTranslationEngine` to
-`CloudTranslationEngine` and implement the API client. Domain and UI stay unchanged.
+- `RECORD_AUDIO` is requested in the listen flow.
+- `INTERNET` is used for one Gemini `generateContent` call per listen session (inline WAV, 16 kHz PCM).

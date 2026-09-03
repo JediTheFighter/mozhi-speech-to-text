@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.core.designsystem.background.AuroraBackground
+import com.mozhi.core.designsystem.theme.Mist
 import com.mozhi.core.designsystem.theme.MistMuted
 import com.mozhi.core.designsystem.theme.NightRaised
 import com.mozhi.domain.model.ModelInstallState
@@ -67,9 +68,17 @@ fun ModelsScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Mist,
+                    )
                 }
-                Text("Local models", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    "Local models",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Mist,
+                )
             }
             Text(
                 "GGML Whisper files download from Hugging Face into app storage. Malayalam is forced at inference time. Fine-tuned Malayalam checkpoints need a one-time convert — see docs/MODELS.md.",
@@ -102,10 +111,10 @@ private fun ModelCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(18.dp)) {
-            Text(model.displayName, style = MaterialTheme.typography.titleLarge)
+            Text(model.displayName, style = MaterialTheme.typography.titleLarge, color = Mist)
             Text("${model.sizeLabel} · ${model.quantization} · ${model.huggingFaceRepo}", color = MistMuted)
             Spacer(Modifier.height(8.dp))
-            Text(model.description, style = MaterialTheme.typography.bodyMedium)
+            Text(model.description, style = MaterialTheme.typography.bodyMedium, color = MistMuted)
             item.downloadProgress?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

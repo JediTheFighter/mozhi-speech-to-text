@@ -7,6 +7,8 @@ data class TranscriptionSnapshot(
     val isProcessing: Boolean = false,
     val audioLevel: Float = 0f,
     val elapsedMillis: Long = 0L,
+    val debugLine: String = "",
+    val errorMessage: String = "",
 ) {
     val displayText: String
         get() = when {

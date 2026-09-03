@@ -9,4 +9,5 @@ interface SpeechRepository {
     suspend fun stop()
     suspend fun ensureEngineReady()
     fun isEngineReady(): Boolean
+    fun clearTranscript()
 }

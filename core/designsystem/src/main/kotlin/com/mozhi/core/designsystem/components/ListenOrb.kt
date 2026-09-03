@@ -19,18 +19,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.mozhi.core.designsystem.theme.LotusCoral
+import com.mozhi.core.designsystem.theme.Mist
 import com.mozhi.core.designsystem.theme.MonsoonTeal
-import com.mozhi.core.designsystem.theme.NightInk
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -64,7 +65,7 @@ fun ListenOrb(
         label = "spin",
     )
 
-    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+    Box(modifier.size(size).clipToBounds(), contentAlignment = Alignment.Center) {
         Canvas(Modifier.matchParentSize()) {
             val radius = this.size.minDimension / 2f
             val center = Offset(this.size.width / 2f, this.size.height / 2f)
@@ -105,29 +106,34 @@ fun ListenOrb(
                 }
             } else {
                 drawCircle(
-                    color = MonsoonTeal.copy(alpha = 0.12f),
+                    color = MonsoonTeal.copy(alpha = 0.35f),
                     radius = radius * 0.62f,
                     center = center,
                     style = Stroke(width = 8f),
                 )
             }
         }
-        FilledIconButton(
-            onClick = onToggle,
-            modifier = Modifier
-                .size(92.dp)
-                .zIndex(1f),
-            shape = CircleShape,
-            colors = IconButtonDefaults.filledIconButtonColors(
-                containerColor = if (listening) LotusCoral else MonsoonTeal,
-                contentColor = NightInk,
-            ),
-        ) {
-            Icon(
-                imageVector = if (listening) Icons.Filled.Stop else Icons.Filled.Mic,
-                contentDescription = if (listening) "Stop listening" else "Start listening",
-                modifier = Modifier.size(40.dp),
-            )
+        key(listening) {
+            FilledIconButton(
+                onClick = onToggle,
+                modifier = Modifier
+                    .size(92.dp)
+                    .zIndex(2f),
+                shape = CircleShape,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = if (listening) LotusCoral else MonsoonTeal,
+                    contentColor = Mist,
+                    disabledContainerColor = MonsoonTeal,
+                    disabledContentColor = Mist,
+                ),
+            ) {
+                Icon(
+                    imageVector = if (listening) Icons.Filled.Stop else Icons.Filled.Mic,
+                    contentDescription = if (listening) "Stop listening" else "Start listening",
+                    modifier = Modifier.size(40.dp),
+                    tint = Mist,
+                )
+            }
         }
     }
 }

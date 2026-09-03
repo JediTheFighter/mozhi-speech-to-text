@@ -5,12 +5,22 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,49 +31,48 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mozhi.core.designsystem.background.AuroraBackground
 import com.mozhi.core.designsystem.components.ListenOrb
+import com.mozhi.core.designsystem.theme.Mist
 import com.mozhi.core.designsystem.theme.MistMuted
 import com.mozhi.core.designsystem.theme.MonsoonTeal
 import com.mozhi.core.designsystem.theme.NightRaised
@@ -73,7 +82,6 @@ import com.mozhi.feature.transcribe.TranscribeViewModel
 
 @Composable
 fun TranscribeRoute(
-    onOpenModels: () -> Unit,
     viewModel: TranscribeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -90,23 +98,16 @@ fun TranscribeRoute(
         viewModel.onPermissionResult(granted, permanentlyDenied)
     }
 
-    LaunchedEffect(state.catalogLoaded, state.selectedModelReady) {
-        if (state.catalogLoaded && !state.selectedModelReady) {
-            viewModel.onStartupIfModelMissing()
-        }
-    }
-
     TranscribeScreen(
         state = state,
         onToggleListen = {
             when {
                 state.listening -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
-                !state.selectedModelReady -> viewModel.showModelPrompt()
+                !state.selectedModelReady -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
                 state.permissionNeeded -> launcher.launch(Manifest.permission.RECORD_AUDIO)
                 else -> viewModel.onMicToggled(state.permissionPermanentlyDenied)
             }
         },
-        onOpenModels = onOpenModels,
         onOpenSettings = {
             context.startActivity(
                 Intent(
@@ -115,9 +116,7 @@ fun TranscribeRoute(
                 ),
             )
         },
-        onClearError = viewModel::clearError,
-        onDismissPrompt = viewModel::dismissModelPrompt,
-        onConfirmDownload = viewModel::downloadDefaultModel,
+        onClearTranscript = viewModel::clearTranscript,
     )
 }
 
@@ -125,138 +124,88 @@ fun TranscribeRoute(
 fun TranscribeScreen(
     state: TranscribeUiState,
     onToggleListen: () -> Unit,
-    onOpenModels: () -> Unit,
     onOpenSettings: () -> Unit,
-    onClearError: () -> Unit,
-    onDismissPrompt: () -> Unit,
-    onConfirmDownload: () -> Unit,
+    onClearTranscript: () -> Unit,
 ) {
-    val snackbar = remember { SnackbarHostState() }
     val clipboard = LocalClipboardManager.current
-    LaunchedEffect(state.errorMessage) {
-        val msg = state.errorMessage ?: return@LaunchedEffect
-        snackbar.showSnackbar(msg)
-        onClearError()
-    }
-
-    val silentHint = state.listening &&
-        state.snapshot.elapsedMillis > 3_000 &&
-        state.snapshot.audioLevel < 0.03f &&
-        state.snapshot.displayText.isBlank()
-
-    AuroraBackground(listening = state.listening) {
-        Box(Modifier.fillMaxSize().statusBarsPadding()) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 22.dp),
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
-                        Text("മൊഴി", style = MaterialTheme.typography.headlineMedium)
-                        Text(MalayalamCopy.AppSubtitle, color = MistMuted, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    IconButton(onClick = onOpenModels) {
-                        Icon(Icons.Outlined.Tune, contentDescription = MalayalamCopy.Models)
-                    }
-                }
-
-                Spacer(Modifier.height(18.dp))
-                LiveTranscriptCard(
-                    committed = state.snapshot.committedText,
-                    partial = state.snapshot.partialText,
-                    listening = state.listening,
-                    processing = state.snapshot.isProcessing,
-                    onCopy = {
-                        val text = state.snapshot.displayText
-                        if (text.isNotBlank()) clipboard.setText(AnnotatedString(text))
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-
-                Spacer(Modifier.height(12.dp))
-                StatusRow(state)
-                if (state.permissionPermanentlyDenied) {
-                    TextButton(onClick = onOpenSettings) {
-                        Text(MalayalamCopy.OpenMicSettings)
-                    }
-                }
-                Column(
-                    Modifier.fillMaxWidth().padding(bottom = 28.dp, top = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    ListenOrb(
-                        listening = state.listening,
-                        audioLevel = state.snapshot.audioLevel,
-                        onToggle = onToggleListen,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = when {
-                            silentHint -> MalayalamCopy.HintSilent
-                            state.listening -> MalayalamCopy.HintListening
-                            !state.selectedModelReady -> MalayalamCopy.HintNoModel
-                            state.permissionNeeded -> MalayalamCopy.HintPermission
-                            else -> MalayalamCopy.HintTap
-                        },
-                        color = MistMuted,
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            }
-            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
+    val view = LocalView.current
+    val keepAwake = state.listening || state.snapshot.isProcessing
+    DisposableEffect(keepAwake) {
+        val window = (view.context as? Activity)?.window
+        if (keepAwake) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
-    if (state.showModelPrompt) {
-        AlertDialog(
-            onDismissRequest = onDismissPrompt,
-            title = { Text(MalayalamCopy.DialogTitle) },
-            text = { Text(MalayalamCopy.DialogBody) },
-            confirmButton = {
-                Button(onClick = onConfirmDownload) { Text(MalayalamCopy.DialogOk) }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismissPrompt) { Text(MalayalamCopy.DialogCancel) }
-            },
-        )
-    }
-
-    if (state.downloading) {
-        Dialog(
-            onDismissRequest = {},
-            properties = DialogProperties(
-                dismissOnBackPress = false,
-                dismissOnClickOutside = false,
-            ),
+    AuroraBackground(listening = state.listening) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 22.dp),
         ) {
+            Text(
+                "മൊഴി",
+                style = MaterialTheme.typography.headlineMedium,
+                color = Mist,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+
+            Spacer(Modifier.height(18.dp))
+            LiveTranscriptCard(
+                committed = state.snapshot.committedText,
+                listening = state.listening,
+                processing = state.snapshot.isProcessing,
+                onCopy = {
+                    val text = state.snapshot.displayText
+                    if (text.isNotBlank()) clipboard.setText(AnnotatedString(text))
+                },
+                onClear = onClearTranscript,
+                modifier = Modifier.weight(1f),
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.height(36.dp)) {
+                if (state.permissionPermanentlyDenied) {
+                    TextButton(onClick = onOpenSettings) {
+                        Text(MalayalamCopy.OpenMicSettings, color = MonsoonTeal)
+                    }
+                }
+            }
             Column(
-                Modifier
-                    .clip(RoundedCornerShape(24.dp))
-                    .background(NightRaised)
-                    .padding(24.dp),
+                Modifier.fillMaxWidth().padding(bottom = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                CircularProgressIndicator(color = MonsoonTeal)
-                Spacer(Modifier.height(16.dp))
-                Text(MalayalamCopy.LoaderTitle, style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(8.dp))
-                Text(MalayalamCopy.LoaderBody, color = MistMuted, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(16.dp))
-                LinearProgressIndicator(
-                    progress = { state.downloadProgress ?: 0f },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MonsoonTeal,
+                ListenOrb(
+                    listening = state.listening,
+                    audioLevel = state.snapshot.audioLevel,
+                    onToggle = onToggleListen,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                val promptError = state.errorMessage
                 Text(
-                    "${(((state.downloadProgress ?: 0f) * 100).toInt()).coerceIn(0, 100)}%",
-                    color = MonsoonTeal,
-                )
+                    text = when {
+                        !promptError.isNullOrBlank() -> promptError
+                        state.snapshot.isProcessing -> ""
+                        state.listening -> MalayalamCopy.HintListening
+                        !state.selectedModelReady -> MalayalamCopy.HintNoModel
+                        state.permissionNeeded -> MalayalamCopy.HintPermission
+                        else -> MalayalamCopy.HintTap
+                    },
+                        color = if (!promptError.isNullOrBlank()) Color(0xFFFF8A80) else MistMuted,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3,
+                    )
+                }
             }
         }
     }
@@ -265,13 +214,22 @@ fun TranscribeScreen(
 @Composable
 private fun LiveTranscriptCard(
     committed: String,
-    partial: String,
     listening: Boolean,
     processing: Boolean,
     onCopy: () -> Unit,
+    onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(committed, processing) {
+        scroll.animateScrollTo(scroll.maxValue)
+    }
     val placeholder = if (listening) MalayalamCopy.PlaceholderListening else MalayalamCopy.PlaceholderIdle
+    val status = when {
+        processing -> MalayalamCopy.Decoding
+        listening -> MalayalamCopy.Live
+        else -> MalayalamCopy.Transcript
+    }
     Column(
         modifier
             .fillMaxWidth()
@@ -283,57 +241,129 @@ private fun LiveTranscriptCard(
             )
             .padding(20.dp),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                if (processing) MalayalamCopy.Decoding else if (listening) MalayalamCopy.Live else MalayalamCopy.Transcript,
+                status,
                 color = MonsoonTeal,
                 style = MaterialTheme.typography.labelLarge,
             )
-            IconButton(onClick = onCopy) {
-                Icon(Icons.Outlined.ContentCopy, contentDescription = MalayalamCopy.Copy)
+            Row {
+                IconButton(onClick = onCopy, enabled = committed.isNotBlank()) {
+                    Icon(
+                        Icons.Outlined.ContentCopy,
+                        contentDescription = MalayalamCopy.Copy,
+                        tint = if (committed.isNotBlank()) Mist else MistMuted.copy(alpha = 0.4f),
+                    )
+                }
+                IconButton(onClick = onClear, enabled = committed.isNotBlank() && !processing) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = MalayalamCopy.Clear,
+                        tint = if (committed.isNotBlank() && !processing) Mist else MistMuted.copy(alpha = 0.4f),
+                    )
+                }
             }
         }
         Box(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScrollbar(scroll),
         ) {
-            AnimatedContent(
-                targetState = committed to partial,
-                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                label = "transcript",
-            ) { (c, p) ->
-                val text = buildAnnotatedString {
-                    if (c.isBlank() && p.isBlank()) {
-                        withStyle(SpanStyle(color = MistMuted)) { append(placeholder) }
-                    } else {
-                        withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Medium)) {
-                            append(c)
-                        }
-                        if (c.isNotBlank() && p.isNotBlank()) append(" ")
-                        withStyle(SpanStyle(color = MonsoonTeal.copy(alpha = 0.92f))) {
-                            append(p)
-                        }
-                        if (listening) {
-                            withStyle(SpanStyle(color = MonsoonTeal)) { append(" ▍") }
-                        }
-                    }
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .padding(end = 10.dp)
+                    .animateContentSize(tween(320, easing = FastOutSlowInEasing)),
+            ) {
+                if (committed.isBlank() && !processing) {
+                    Text(
+                        placeholder,
+                        color = MistMuted,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                } else if (committed.isNotBlank()) {
+                    Text(
+                        committed,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
-                Text(text, style = MaterialTheme.typography.bodyLarge)
+                AnimatedVisibility(
+                    visible = processing,
+                    enter = fadeIn(tween(220)) + expandVertically(tween(280)),
+                    exit = fadeOut(tween(180)) + shrinkVertically(tween(180)),
+                ) {
+                    TranscribingLoader(Modifier.padding(top = if (committed.isNotBlank()) 16.dp else 8.dp))
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StatusRow(state: TranscribeUiState) {
-    Text(
-        text = buildString {
-            append(state.selectedModelName.ifBlank { MalayalamCopy.NoModel })
-            append("  ·  ")
-            append(MalayalamCopy.LocalWhisper)
-        },
-        color = MistMuted,
-        style = MaterialTheme.typography.bodyMedium,
+private fun TranscribingLoader(modifier: Modifier = Modifier) {
+    val pulse = rememberInfiniteTransition(label = "transcribe-pulse")
+    val alpha by pulse.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "loader-alpha",
+    )
+    Row(
+        modifier.graphicsLayer { this.alpha = alpha },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        repeat(3) { index ->
+            val delay = index * 120
+            val dot by pulse.animateFloat(
+                initialValue = 0.55f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(650, delayMillis = delay, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "dot-$index",
+            )
+            Box(
+                Modifier
+                    .size((7 + 3 * dot).dp)
+                    .clip(CircleShape)
+                    .background(MonsoonTeal.copy(alpha = 0.35f + 0.5f * dot)),
+            )
+        }
+        Text(
+            MalayalamCopy.Decoding,
+            color = MonsoonTeal,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+private fun Modifier.verticalScrollbar(
+    state: ScrollState,
+    color: Color = MonsoonTeal.copy(alpha = 0.55f),
+    thickness: Dp = 3.dp,
+): Modifier = drawWithContent {
+    drawContent()
+    val max = state.maxValue
+    if (max <= 0) return@drawWithContent
+    val view = size.height
+    val bar = (view * view / (view + max)).coerceIn(28.dp.toPx(), view * 0.45f)
+    val y = state.value / max.toFloat() * (view - bar)
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(size.width - thickness.toPx(), y),
+        size = Size(thickness.toPx(), bar),
+        cornerRadius = CornerRadius(thickness.toPx()),
     )
 }

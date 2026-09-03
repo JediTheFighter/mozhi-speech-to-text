@@ -6,15 +6,14 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.mozhi.domain.catalog.SpeechModelCatalog
+import com.mozhi.core.common.MozhiLog
 import com.mozhi.domain.model.ListeningState
 import com.mozhi.domain.model.TranscriptionSnapshot
-import com.mozhi.domain.usecase.DownloadSpeechModelUseCase
-import com.mozhi.domain.usecase.ObserveModelCatalogUseCase
+import com.mozhi.domain.repository.SpeechRepository
+import com.mozhi.domain.transcription.GeminiUserErrors
 import com.mozhi.domain.usecase.ObserveTranscriptionUseCase
 import com.mozhi.domain.usecase.StartListeningUseCase
 import com.mozhi.domain.usecase.StopListeningUseCase
-import com.mozhi.domain.usecase.TranslateTranscriptUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,111 +32,59 @@ data class TranscribeUiState(
     val permissionNeeded: Boolean = false,
     val permissionPermanentlyDenied: Boolean = false,
     val selectedModelReady: Boolean = false,
-    val catalogLoaded: Boolean = false,
-    val selectedModelName: String = "",
-    val showModelPrompt: Boolean = false,
-    val downloading: Boolean = false,
-    val downloadProgress: Float? = null,
     val errorMessage: String? = null,
-    val translationEnabled: Boolean = false,
 ) {
-    val listening: Boolean get() = sessionActive || snapshot.isListening
+    val listening: Boolean get() = sessionActive
 }
 
 private data class SessionChrome(
     val active: Boolean = false,
-    val showPrompt: Boolean = false,
-    val downloading: Boolean = false,
 )
 
 @HiltViewModel
 class TranscribeViewModel @Inject constructor(
     @ApplicationContext private val app: Context,
     observeTranscription: ObserveTranscriptionUseCase,
-    observeModels: ObserveModelCatalogUseCase,
+    private val speechRepository: SpeechRepository,
     private val startListening: StartListeningUseCase,
     private val stopListening: StopListeningUseCase,
-    private val downloadModel: DownloadSpeechModelUseCase,
-    translateTranscript: TranslateTranscriptUseCase,
 ) : ViewModel() {
 
     private val permissionDeniedForever = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
     private val chrome = MutableStateFlow(SessionChrome())
     private var sessionGeneration = 0
-    private var startupPromptShown = false
 
     val uiState: StateFlow<TranscribeUiState> = combine(
         observeTranscription(),
-        observeModels(),
         permissionDeniedForever,
         error,
         chrome,
-    ) { snap, models, deniedForever, err, session ->
-        val selected = models.firstOrNull { it.selected } ?: models.firstOrNull {
-            it.model.id == SpeechModelCatalog.DEFAULT_MODEL_ID
-        }
-        val progress = models.firstOrNull { it.downloadProgress != null }?.downloadProgress
+    ) { snap, deniedForever, err, session ->
         TranscribeUiState(
             snapshot = snap,
             listeningState = when {
                 session.active || snap.isListening -> ListeningState.Listening
                 snap.isProcessing -> ListeningState.Processing
-                err != null -> ListeningState.Error
+                err != null || snap.errorMessage.isNotBlank() -> ListeningState.Error
                 else -> ListeningState.Idle
             },
             sessionActive = session.active,
             permissionNeeded = !hasMicPermission(),
             permissionPermanentlyDenied = deniedForever,
-            selectedModelReady = selected?.downloaded == true,
-            catalogLoaded = models.isNotEmpty(),
-            selectedModelName = selected?.model?.displayName.orEmpty(),
-            showModelPrompt = session.showPrompt && !session.downloading && selected?.downloaded != true,
-            downloading = session.downloading,
-            downloadProgress = progress ?: if (session.downloading) 0f else null,
-            errorMessage = err,
-            translationEnabled = translateTranscript.isAvailable,
+            selectedModelReady = speechRepository.isEngineReady(),
+            errorMessage = err ?: snap.errorMessage.takeIf { it.isNotBlank() },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TranscribeUiState())
 
-    fun onStartupIfModelMissing() {
-        if (startupPromptShown) return
-        startupPromptShown = true
-        if (!uiState.value.selectedModelReady) {
-            chrome.update { it.copy(showPrompt = true) }
-        }
-    }
-
-    fun showModelPrompt() {
-        chrome.update { it.copy(showPrompt = true) }
-    }
-
-    fun dismissModelPrompt() {
-        chrome.update { it.copy(showPrompt = false) }
-    }
-
-    fun downloadDefaultModel() {
-        chrome.update { it.copy(showPrompt = false, downloading = true) }
-        viewModelScope.launch {
-            runCatching {
-                downloadModel(SpeechModelCatalog.DEFAULT_MODEL_ID)
-            }.onFailure {
-                error.value = MalayalamCopy.DownloadFailed
-                chrome.update { session -> session.copy(downloading = false, showPrompt = true) }
-            }.onSuccess {
-                chrome.update { session -> session.copy(downloading = false, showPrompt = false) }
-            }
-        }
-    }
-
     fun onMicToggled(permanentlyDenied: Boolean) {
         permissionDeniedForever.value = permanentlyDenied
-        if (chrome.value.active || uiState.value.snapshot.isListening) {
+        if (chrome.value.active) {
             stopSession()
             return
         }
-        if (!uiState.value.selectedModelReady) {
-            showModelPrompt()
+        if (!speechRepository.isEngineReady()) {
+            error.value = GeminiUserErrors.KeyMissing
             return
         }
         if (!hasMicPermission()) {
@@ -149,11 +96,16 @@ class TranscribeViewModel @Inject constructor(
     fun onPermissionResult(granted: Boolean, permanentlyDenied: Boolean) {
         permissionDeniedForever.value = permanentlyDenied && !granted
         if (granted) {
-            if (!uiState.value.selectedModelReady) showModelPrompt()
+            if (!speechRepository.isEngineReady()) error.value = GeminiUserErrors.KeyMissing
             else startSession()
         } else {
             error.value = MalayalamCopy.PermissionDenied
         }
+    }
+
+    fun clearTranscript() {
+        speechRepository.clearTranscript()
+        error.value = null
     }
 
     fun clearError() {
@@ -167,9 +119,10 @@ class TranscribeViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { startListening() }
                 .onFailure { t ->
+                    MozhiLog.e("startSession failed gen=$generation", t)
                     if (generation == sessionGeneration) {
                         chrome.update { it.copy(active = false) }
-                        error.value = t.message ?: MalayalamCopy.StartFailed
+                        error.value = GeminiUserErrors.from(t.message)
                     }
                 }
                 .onSuccess {
@@ -185,6 +138,10 @@ class TranscribeViewModel @Inject constructor(
         chrome.update { it.copy(active = false) }
         viewModelScope.launch {
             runCatching { stopListening() }
+                .onFailure {
+                    MozhiLog.e("stopSession failed", it)
+                    error.value = GeminiUserErrors.from(it.message)
+                }
         }
     }
 

@@ -13,10 +13,21 @@ android {
         applicationId = "com.mozhi.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 5
+        versionName = "0.1.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        val geminiKeyRaw = rootProject.file("local.properties")
+            .takeIf { it.exists() }
+            ?.readLines()
+            ?.firstOrNull { it.trim().startsWith("GEMINI_API_KEY=") }
+            ?.substringAfter("=")
+            ?.trim()
+            ?.trim('"')
+            ?: System.getenv("GEMINI_API_KEY")
+            ?: ""
+        val geminiKey = geminiKeyRaw.replace("\\", "\\\\").replace("\"", "\\\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
     }
     buildTypes {
         release {
@@ -37,7 +48,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -57,7 +71,6 @@ dependencies {
     implementation(project(":core:stt"))
     implementation(project(":core:translation"))
     implementation(project(":feature:transcribe"))
-    implementation(project(":feature:models"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
