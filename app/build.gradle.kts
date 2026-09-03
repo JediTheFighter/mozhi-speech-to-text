@@ -13,8 +13,8 @@ android {
         applicationId = "com.mozhi.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.1.3"
+        versionCode = 5
+        versionName = "0.1.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         val geminiKeyRaw = rootProject.file("local.properties")
@@ -71,7 +71,6 @@ dependencies {
     implementation(project(":core:stt"))
     implementation(project(":core:translation"))
     implementation(project(":feature:transcribe"))
-    implementation(project(":feature:models"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

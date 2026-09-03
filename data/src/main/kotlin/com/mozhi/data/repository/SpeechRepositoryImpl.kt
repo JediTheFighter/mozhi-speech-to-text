@@ -36,6 +36,10 @@ class SpeechRepositoryImpl @Inject constructor(
 
     override fun isEngineReady(): Boolean = gemini.hasApiKey()
 
+    override fun clearTranscript() {
+        streaming.clearTranscript()
+    }
+
     override suspend fun ensureEngineReady() {
         check(gemini.hasApiKey()) {
             "GEMINI_API_KEY missing. Add it to local.properties and rebuild the app."

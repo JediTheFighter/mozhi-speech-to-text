@@ -5,6 +5,7 @@ import com.mozhi.core.common.AudioConfig
 import com.mozhi.core.common.MozhiLog
 import com.mozhi.data.remote.GeminiSpeechClient
 import com.mozhi.domain.model.TranscriptionSnapshot
+import com.mozhi.domain.transcription.GeminiUserErrors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -43,9 +44,10 @@ class GeminiStreamingSpeechToText @Inject constructor(
         stopRequested = false
         pcmSize = 0
         pushed.set(0)
+        val kept = _snapshot.value.committedText
         _snapshot.value = TranscriptionSnapshot(
+            committedText = kept,
             isListening = true,
-            debugLine = "listening — tap stop to send to Gemini",
         )
         MozhiLog.i("gemini capture start session=$session")
         collectJob?.cancel()
@@ -62,20 +64,30 @@ class GeminiStreamingSpeechToText @Inject constructor(
 
     fun push(chunk: AudioChunk) {
         if (stopRequested) return
-        val n = pushed.incrementAndGet()
-        if (n == 1 || n % 10 == 0) {
-            val msg = "mic chunk #$n rms=${"%.4f".format(chunk.rms)} buffered=${pcmSize}"
-            MozhiLog.i(msg)
-            _snapshot.update { it.copy(debugLine = msg, audioLevel = chunk.rms.coerceIn(0f, 1f) * 3f) }
-        }
+        pushed.incrementAndGet()
         inbox.trySend(chunk)
+        _snapshot.update {
+            it.copy(audioLevel = (it.audioLevel * 0.45f + chunk.rms * 3.2f).coerceIn(0f, 1f))
+        }
     }
 
     fun fail(message: String) {
         MozhiLog.e(message)
         _snapshot.update {
-            it.copy(debugLine = message, isProcessing = false, errorMessage = message)
+            it.copy(
+                isProcessing = false,
+                isListening = false,
+                errorMessage = GeminiUserErrors.from(message),
+            )
         }
+    }
+
+    fun clearTranscript() {
+        _snapshot.value = TranscriptionSnapshot(
+            isListening = _snapshot.value.isListening,
+            isProcessing = _snapshot.value.isProcessing,
+            audioLevel = _snapshot.value.audioLevel,
+        )
     }
 
     private fun append(chunk: AudioChunk) {
@@ -103,21 +115,21 @@ class GeminiStreamingSpeechToText @Inject constructor(
         stopRequested = true
         val leftover = pcm.copyOf(pcmSize)
         MozhiLog.i("gemini flush leftover=${leftover.size}")
-        _snapshot.update {
-            it.copy(
-                isListening = false,
-                isProcessing = true,
-                errorMessage = "",
-                debugLine = "sending ${leftover.size / AudioConfig.SAMPLE_RATE_HZ}s to Gemini…",
-            )
-        }
         if (leftover.isEmpty()) {
             _snapshot.update { it.copy(isListening = false, isProcessing = false, audioLevel = 0f) }
             finishSession()
             return
         }
+        _snapshot.update {
+            it.copy(
+                isListening = false,
+                isProcessing = true,
+                errorMessage = "",
+                audioLevel = 0f,
+            )
+        }
         if (leftover.size < AudioConfig.SAMPLE_RATE_HZ / 2) {
-            failAndIdle("Recording too short. Speak, then tap stop.")
+            failAndIdle(GeminiUserErrors.TooShort)
             finishSession()
             return
         }
@@ -125,19 +137,18 @@ class GeminiStreamingSpeechToText @Inject constructor(
             val text = withTimeoutOrNull(45_000) { gemini.transcribe(leftover) }
             if (session != epoch) return
             when {
-                text == null -> failAndIdle("Gemini timed out. Check network and GEMINI_API_KEY.")
-                text.isBlank() -> failAndIdle("Gemini returned no transcript.")
+                text == null -> failAndIdle(GeminiUserErrors.Timeout)
+                text.isBlank() -> failAndIdle(GeminiUserErrors.Empty)
                 else -> {
                     MozhiLog.i("gemini flush text='${text.take(120)}'")
-                    _snapshot.update {
-                        it.copy(
-                            committedText = text,
+                    _snapshot.update { current ->
+                        current.copy(
+                            committedText = appendTranscript(current.committedText, text),
                             partialText = "",
                             isListening = false,
                             isProcessing = false,
                             audioLevel = 0f,
                             errorMessage = "",
-                            debugLine = "done '${text.take(80)}'",
                         )
                     }
                 }
@@ -145,7 +156,7 @@ class GeminiStreamingSpeechToText @Inject constructor(
         } catch (t: Throwable) {
             MozhiLog.e("gemini flush failed", t)
             if (session == epoch) {
-                failAndIdle(t.message ?: "Gemini request failed")
+                failAndIdle(GeminiUserErrors.from(t.message))
             }
         }
         finishSession()
@@ -158,7 +169,6 @@ class GeminiStreamingSpeechToText @Inject constructor(
                 isListening = false,
                 audioLevel = 0f,
                 errorMessage = message,
-                debugLine = message,
             )
         }
     }
@@ -166,5 +176,12 @@ class GeminiStreamingSpeechToText @Inject constructor(
     private fun finishSession() {
         epoch += 1
         pcmSize = 0
+    }
+
+    private fun appendTranscript(previous: String, incoming: String): String {
+        val next = incoming.trim()
+        if (next.isEmpty()) return previous
+        if (previous.isBlank()) return next
+        return "$previous\n\n$next"
     }
 }
